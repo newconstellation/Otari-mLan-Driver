@@ -81,3 +81,16 @@ mLAN space + 0x00 (enabler address): compare `0xFFFF000000000000` (unowned), swa
 ClearEnablerAddress swaps it back. Most likely the ND-20 rejects other access to Core/mLAN until it's claimed.
 
 New tool **nd20claim** (asks for confirmation): claim, then sweep mLAN/Core spaces, then release.
+
+## nd20claim 0.2 results (2026-10-23)
+- **Claim works.** The 64-bit lock on 0xFFFFED000000 succeeded; previous value 0xFFFF000000000000 (unowned).
+  The release lock also succeeded. So the ND-20 implements the Enabler-address lock.
+- Even while claimed, every 4-byte block read of mLAN and Core space returns address error, as do
+  firmware version (0xFFFFED102000) and Core version. Yamaha's NCP08 HAL reads these with plain
+  block reads (ReadBlockWithRetryBody), so the ND-20's original firmware doesn't expose them the way the
+  "upgraded" firmware does.
+- No notification was written to our callback space within 200 ms.
+
+Next (nd20claim 0.3): lock-reads (CAS with compare == new) and other read sizes on mLAN space.
+Next (nd20probe 0.5): find out why macOS won't let us open the AV/C connection, since the kernel itself
+did talk AV/C to the ND-20 when it was detected (it found the audio subunit).

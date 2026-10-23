@@ -7,6 +7,9 @@
  *   0xFFFF_ED00_0000 on the ND-20): 0xFFFF000000000000 ("unowned")  ->  our node + callback address.
  *   At the end it swaps it back to 0xFFFF000000000000. A power cycle also clears it.
  *
+ * While claimed it also tries "lock-reads": compare-and-swap with compare == new, which can never
+ * change a register but returns its current value (for registers that only answer lock requests).
+ *
  * Build: bash scripts/build-probe.sh     Run: ./build/nd20claim > ~/Desktop/nd20claim.txt
  */
 #include <stdio.h>
@@ -87,6 +90,28 @@ static IOReturn cas64(UInt32 lo, UInt32 cmpHi, UInt32 cmpLo, UInt32 newHi, UInt3
     return r;
 }
 
+/* Lock-read: CAS with compare == new (size 4 or 8). Never changes the register. */
+static void lockread(UInt32 lo, UInt32 size) {
+    FWAddress a = {0, 0xFFFF, lo};
+    UInt32 magic[2] = {CFSwapInt32HostToBig(0x5A5AA5A5), CFSwapInt32HostToBig(0xC3C33C3C)};
+    UInt32 same[2]  = {magic[0], magic[1]};
+    UInt32 old[2]   = {0, 0};
+    IOReturn r = (*gDev)->CompareSwap64(gDev, gSvc, &a, magic, same, old, size, 0, 0);
+    if (r) printf("err %08x ", r);
+    else if (size == 8) printf("%08x%08x ", CFSwapInt32BigToHost(old[0]), CFSwapInt32BigToHost(old[1]));
+    else printf("%08x ", CFSwapInt32BigToHost(old[0]));
+}
+
+static void tryread(const char *label, UInt32 lo, UInt32 size) {
+    FWAddress a = {0, 0xFFFF, lo};
+    UInt8 b[512]; UInt32 sz = size;
+    IOReturn r = (*gDev)->Read(gDev, gSvc, &a, b, &sz, 0, 0);
+    printf("  %-28s %3u bytes: ", label, size);
+    if (r) { printf("err 0x%08x %s\n", r, errname(r)); return; }
+    for (UInt32 i = 0; i < sz && i < 64; i++) printf("%02x%s", b[i], (i % 4 == 3) ? " " : "");
+    printf("\n");
+}
+
 static UInt32 cfnum(io_object_t obj, const char *key) {
     UInt32 v = 0xFFFFFFFF;
     CFStringRef k = CFStringCreateWithCString(NULL, key, kCFStringEncodingUTF8);
@@ -100,7 +125,7 @@ static UInt32 cfnum(io_object_t obj, const char *key) {
 int main(int argc, char **argv) {
     int yes = (argc > 1 && strcmp(argv[1], "--yes") == 0);
     setvbuf(stdout, NULL, _IONBF, 0);   /* write output immediately, even if something crashes */
-    printf("nd20claim 0.2\n");
+    printf("nd20claim 0.3\n");
     if (!yes) {
         fprintf(stderr,
             "This tool makes ONE reversible write to the ND-20: it claims the device the way Yamaha's\n"
@@ -165,6 +190,25 @@ int main(int argc, char **argv) {
     if (r == 0 && !claimed) printf("  !! Not claimed: the ND-20 already had an owner (value above). Not overriding it.\n");
 
     usleep(200000);
+    printf("\n== Block reads of other sizes at mLAN space ==\n");
+    tryread("mLAN +0x000", mlanLo, 8);
+    tryread("mLAN +0x000", mlanLo, 16);
+    tryread("mLAN +0x000 (whole space)", mlanLo, sp[5] > 512 ? 512 : sp[5]);
+    tryread("mLAN +0x008", mlanLo + 8, 8);
+
+    printf("\n== Lock-reads of mLAN space (compare == new; changes nothing) ==\n");
+    for (UInt32 off = 0; off < sp[5]; off += 8) {
+        if (off % 32 == 0) printf("  +%04x 64-bit: ", off);
+        lockread(mlanLo + off, 8);
+        if (off % 32 == 24) printf("\n");
+    }
+    printf("\n");
+    for (UInt32 off = 0; off < 0x20; off += 4) {
+        if (off % 16 == 0) printf("  +%04x 32-bit: ", off);
+        lockread(mlanLo + off, 4);
+        if (off % 16 == 12) printf("\n");
+    }
+
     sweep("mLAN space", mlanLo, sp[5] > 0x200 ? 0x200 : sp[5]);
     sweep("Core space", coreLo, sp[3] > 0x500 ? 0x500 : sp[3]);
     e = read4(coreLo + 0xC0FFC0, &v);

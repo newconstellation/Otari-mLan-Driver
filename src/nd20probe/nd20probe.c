@@ -280,6 +280,36 @@ static void avc(IOFireWireAVCLibUnitInterface **u, const char *label, const UInt
     printf("   (%s)\n", rc);
 }
 
+/* Why does the AV/C library fail to open? Try opening the user client ourselves. */
+static void avc_diag(io_object_t device) {
+    printf("\n== AV/C connection diagnostics ==\n");
+    const char *classes[] = {"IOFireWireAVCUnit", "IOFireWireAVCSubUnit", "IOFireWireAVCNub"};
+    for (int c = 0; c < 3; c++) {
+        io_iterator_t it = 0;
+        io_object_t o;
+        if (IORegistryEntryCreateIterator(device, kIOServicePlane, kIORegistryIterateRecursively, &it) != KERN_SUCCESS) continue;
+        while ((o = IOIteratorNext(it))) {
+            if (IOObjectConformsTo(o, classes[c])) {
+                io_name_t cls = "";
+                IOObjectGetClass(o, cls);
+                const UInt32 types[] = {0, 1, 12};   /* 12 = kIOFireWireAVCLibConnection */
+                for (int t = 0; t < 3; t++) {
+                    UInt32 type = types[t];
+                    io_connect_t conn = 0;
+                    kern_return_t kr = IOServiceOpen(o, mach_task_self(), type, &conn);
+                    printf("  IOServiceOpen(%s [%s], type %u): 0x%08x%s\n", classes[c], cls, type, kr, kr ? "" : " OK");
+                    if (conn) IOServiceClose(conn);
+                }
+                UInt32 busy = 0;
+                IOServiceGetBusyState(o, &busy);
+                printf("    busy state %u\n", busy);
+            }
+            IOObjectRelease(o);
+        }
+        IOObjectRelease(it);
+    }
+}
+
 static void probe_avc(io_object_t avcUnit, io_object_t device) {
     IOCFPlugInInterface **plug = NULL;
     SInt32 score = 0;
@@ -358,7 +388,7 @@ static io_object_t find_child(io_object_t parent, const char *cls) {
 
 int main(int argc, char **argv) {
     int want_avc = (argc > 1 && strcmp(argv[1], "--avc") == 0);
-    printf("nd20probe 0.4 — read-only\n");
+    printf("nd20probe 0.5 — read-only\n");
     io_iterator_t it = 0;
     if (IOServiceGetMatchingServices(kIOMasterPortDefault, IOServiceMatching("IOFireWireDevice"), &it) != KERN_SUCCESS) {
         printf("!! Could not search the FireWire bus\n");
@@ -375,6 +405,7 @@ int main(int argc, char **argv) {
         found = 1;
         printf("=> Otari device found\n");
         io_object_t avcUnit = find_child(d, "IOFireWireAVCUnit");
+        avc_diag(d);
         if (avcUnit) { if (want_avc) probe_avc(avcUnit, d); IOObjectRelease(avcUnit); }
         else printf("!! No IOFireWireAVCUnit under this device\n");
         probe_registers(d);
