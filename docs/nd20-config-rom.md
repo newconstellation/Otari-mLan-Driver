@@ -122,3 +122,15 @@ or NCP08 HAL), so the AV/C command set for this firmware isn't documented there.
 Otari spec: ND-20B = IEEE 1394a **S400**, 3 ports (2 metal + 1 optical), 32–96 kHz, WCLK in.
 ND-20s network with each other **without a computer**, so a standalone unit probably streams on its own.
 nd20probe 0.7 reads the IRM channel/bandwidth registers and runs an AV/C GENERAL INQUIRY opcode survey.
+
+## ND-20B rear panel (user photos, 2026-10-23)
+- **ROUTING**: 4 hex rotary switches (0–F), one per slot A–D. All appear set to **0**.
+- **UNIT ID**: 2 hex rotary switches (00–FF). Both appear set to **0** (Unit ID 00).
+- **SETUP 1** and **SETUP 2**: two 6-way DIP switch banks (positions to be confirmed).
+- **SERIAL I/O**: 8-pin mini-DIN. Possibly a remote-control or computer port (RS-232/422?). Another possible control path.
+- **S400 PORT 1–3** (2 × 6-pin metal, 1 optical), **WCLK IN/OUT** BNC, EXT PWR IN, AC in.
+
+Working hypothesis: native ND-20 networking needs no computer, so each unit probably transmits its
+inputs on an isochronous channel derived from its UNIT ID, and each slot's ROUTING switch picks which
+unit's stream that slot plays. If so, a Mac driver can act like "another ND-20": receive the ND-20's
+broadcast and transmit its own stream for a slot whose ROUTING points at the Mac's unit ID.
