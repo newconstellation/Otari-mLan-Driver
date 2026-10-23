@@ -48,3 +48,23 @@ proprietary**, via the register area at 0xFFFFE0010000. nd20probe 0.2 dumps that
 
 Next: get the real mLAN v1 protocol from Yamaha's legacy **mLAN Driver/mLAN Tools 1.2.0 for Mac OS X**
 (the generic mLAN driver for PH-chip / third-party devices) instead of probing with writes blind.
+
+## nd20probe 0.3 results (2026-10-23): the ND-20 answers
+- **Block read of 32 bytes at 0xFFFFE0000000 works** and returns a valid mLAN address map:
+  `0000f000 00007d00 04000000 00000500 0d000000 0000010c 00000000 00000000`
+
+  | Space     | Address          | Size   |
+  |-----------|------------------|--------|
+  | BootParam | 0xFFFF_E000_F000 | 0x7D00 |
+  | Core      | 0xFFFF_E400_0000 | 0x500  |
+  | mLAN      | 0xFFFF_ED00_0000 | 0x10C  |
+  | App       | (none)           | 0      |
+- A *quadlet* read at the same address returns `0000003f`, which doesn't match the block data. The firmware
+  treats quadlet and block reads differently. Yamaha's HAL always uses **4-byte block reads**.
+- 64-byte block reads of each space and the HAL's fixed registers (0xFFFFED10xxxx) returned address error.
+- Generic mLAN-space layout (Enabler 1.2): +0x00 enabler address, +0x08 transporter mode,
+  +0x0C+4n bandwidth request n, +0x0E+4n channel request n, +0x20 serial port data address,
+  +0x28 serial port data out, +0x100 identify, +0x104 posted-write partition.
+  Core space version at Core+0xC0FFC0.
+
+nd20probe 0.4 sweeps each space with 4-byte block reads.

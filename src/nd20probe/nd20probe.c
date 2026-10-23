@@ -6,6 +6,8 @@
  *   1b. Dumps the mLAN register area named in the ROM's unit-dependent leaf (reads only).
  *   1c. Tries the reads Yamaha's mLAN Enabler 1.2 makes: block read of the address map at
  *       0xFFFFE0000000, and the NC1/PH1 ("NCP08") fixed registers at 0xFFFFED10xxxx.
+ *   1d. Sweeps each space with 4-byte BLOCK reads (how Yamaha's HAL reads registers).
+ *   AV/C queries only run with:  nd20probe --avc
  *   2. Reads the IEC 61883-1 plug control registers (oMPR/oPCR, iMPR/iPCR).
  *   3. Sends AV/C STATUS queries: UNIT INFO, SUBUNIT INFO, PLUG INFO,
  *      plug signal formats, and stream-format queries.
@@ -93,8 +95,25 @@ static void try_quad(IOFireWireLibDeviceRef dev, io_object_t svc, const char *la
     else printf("%08x\n", v);
 }
 
+/* Sweep with 4-byte block reads, 8 per line; "--------" = unreadable. */
+static void sweep4(IOFireWireLibDeviceRef dev, io_object_t svc, UInt32 lo, UInt32 bytes) {
+    UInt32 ok = 0, bad = 0, firstErr = 0;
+    for (UInt32 off = 0; off < bytes; off += 4) {
+        UInt8 b[4]; UInt32 sz = 4;
+        if (off % 32 == 0) printf("  %04x%08x: ", 0xFFFF, lo + off);
+        int e = read_block(dev, svc, 0xFFFF, lo + off, b, &sz);
+        if (e || sz != 4) { printf("-------- "); if (!bad++) firstErr = (UInt32)e; }
+        else { printf("%02x%02x%02x%02x ", b[0], b[1], b[2], b[3]); ok++; }
+        if (off % 32 == 28) printf("\n");
+    }
+    if (bytes % 32) printf("\n");
+    printf("  (%u readable, %u unreadable", ok, bad);
+    if (bad) printf("; first error 0x%08x %s", firstErr, errname((IOReturn)firstErr));
+    printf(")\n");
+}
+
 /* Dump 'count' quadlets from hi:lo, 8 per line, marking unreadable ones as "--------". */
-static void dump_region(IOFireWireLibDeviceRef dev, io_object_t svc, UInt16 hi, UInt32 lo, UInt32 count) {
+__attribute__((unused)) static void dump_region(IOFireWireLibDeviceRef dev, io_object_t svc, UInt16 hi, UInt32 lo, UInt32 count) {
     UInt32 errs = 0, firstErr = 0;
     for (UInt32 i = 0; i < count; i++) {
         UInt32 v = 0;
@@ -185,22 +204,32 @@ static void probe_registers(io_object_t svc) {
                 UInt32 len = (map[k*8+4] << 24) | (map[k*8+5] << 16) | (map[k*8+6] << 8) | map[k*8+7];
                 printf("  %-9s space: offset 0x%08x size 0x%08x\n", names[k], off, len);
                 if (off != 0xFFFFFFFF && len) {
-                    char lab[48]; snprintf(lab, sizeof lab, "  %s space first 64 B", names[k]);
-                    try_block(dev, svc, lab, 0xFFFF, 0xE0000000 + off, 64);
+                    UInt32 cap = len > 0x500 ? 0x400 : len;
+                    printf("  %s space, first 0x%x bytes (4-byte block reads):\n", names[k], cap);
+                    sweep4(dev, svc, 0xE0000000 + off, cap);
+                }
+                if (k == 1 && off != 0xFFFFFFFF) {
+                    try_block(dev, svc, "  Core space version (Core+0xC0FFC0)", 0xFFFF, 0xE0000000 + off + 0xC0FFC0, 4);
+                    try_block(dev, svc, "  Core space version, 64 B", 0xFFFF, 0xE0000000 + off + 0xC0FFC0, 64);
+                }
+                if (k == 2 && off != 0xFFFFFFFF) {
+                    UInt32 m = 0xE0000000 + off;
+                    printf("  mLAN registers, 4-byte block vs quadlet reads:\n");
+                    UInt32 regs[] = {0x00, 0x04, 0x08, 0x0C, 0x10, 0x20, 0x28, 0x100, 0x104, 0x108};
+                    const char *rn[] = {"enabler addr hi", "enabler addr lo", "transporter mode", "bandwidth req 0",
+                                        "channel req 0", "serial port data addr", "serial port data out",
+                                        "identify", "posted-write partition", "(0x108)"};
+                    for (int r = 0; r < 10; r++) {
+                        char lab[64]; snprintf(lab, sizeof lab, "    +0x%03x %s", regs[r], rn[r]);
+                        try_block(dev, svc, lab, 0xFFFF, m + regs[r], 4);
+                        try_quad (dev, svc, lab, 0xFFFF, m + regs[r]);
+                    }
                 }
             }
         }
     }
 
-    printf("\n== mLAN register area, first 1 KB (reads only) ==\n");
-    dump_region(dev, svc, mhi, mlo, 256);
 
-    printf("\n== mLAN register area, sparse map up to +64 KB (first quadlet of each 256-byte block) ==\n");
-    for (UInt32 off = 0x400; off < 0x10000; off += 0x100) {
-        UInt32 v = 0;
-        if (read_q_hi(dev, svc, mhi, mlo + off, &v) == 0) printf("  +0x%05x: %08x\n", off, v);
-    }
-    printf("(blocks not listed did not respond)\n");
 
     printf("\n== IEC 61883-1 plug control registers ==\n");
     struct { const char *name; UInt32 addr; } regs[] = {
@@ -327,8 +356,9 @@ static io_object_t find_child(io_object_t parent, const char *cls) {
     return found;
 }
 
-int main(void) {
-    printf("nd20probe 0.3 — read-only\n");
+int main(int argc, char **argv) {
+    int want_avc = (argc > 1 && strcmp(argv[1], "--avc") == 0);
+    printf("nd20probe 0.4 — read-only\n");
     io_iterator_t it = 0;
     if (IOServiceGetMatchingServices(kIOMasterPortDefault, IOServiceMatching("IOFireWireDevice"), &it) != KERN_SUCCESS) {
         printf("!! Could not search the FireWire bus\n");
@@ -345,7 +375,7 @@ int main(void) {
         found = 1;
         printf("=> Otari device found\n");
         io_object_t avcUnit = find_child(d, "IOFireWireAVCUnit");
-        if (avcUnit) { probe_avc(avcUnit, d); IOObjectRelease(avcUnit); }
+        if (avcUnit) { if (want_avc) probe_avc(avcUnit, d); IOObjectRelease(avcUnit); }
         else printf("!! No IOFireWireAVCUnit under this device\n");
         probe_registers(d);
         IOObjectRelease(d);
