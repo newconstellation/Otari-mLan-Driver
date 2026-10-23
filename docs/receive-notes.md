@@ -1,0 +1,41 @@
+# Stage 2: receiving the ND-20's audio (nd20rx, nd20listen, ND20Audio)
+
+## Design (2026-10-23)
+- **Receive only.** The Mac listens; it writes nothing to the ND-20 and books no bandwidth. The isochronous
+  channel object is created with `doIRM = false`, because the ND-20 already allocated its channel at the IRM.
+- **Which FireWire object is opened:** the Mac's own node (`IOFireWireLocalNode`) through IOFireWireLib.
+  If that can't be opened, the ND-20 device itself is opened instead.
+- **DMA program:** per channel, a ring of 512 NuDCL "receive packet" commands (64 ms at 8000 packets/s),
+  each storing the 4-byte isochronous header plus up to 2052 bytes of payload, and a time stamp.
+  Every 16th DCL has a callback (every 2 ms) with `kNuDCLUpdateBeforeCallback`, so the header and time stamp
+  are valid when the packets are decoded.
+- A **remote isoch port** stands in for the ND-20 as the talker; its GetSupported handler returns only the
+  wanted channel (bit 63 = channel 0, as in IOFWIsochChannel.cpp).
+- **Decoding:** isochronous header (data_length, channel, tcode 0xA; byte order detected per packet),
+  CIP (SID, DBS, DBC, FMT, FDF, SYT), AM824 quadlets. Audio slots = labels 0x40–0x4F (MBLA);
+  if none, labels 0x00–0x3F (IEC 60958). Up to 16 audio slots kept per stream; the driver uses the first 8.
+  Sample rate from FDF bits 0–2. Lost packets counted from DBC jumps.
+- **Clock:** the first stream with audio becomes the clock master. A least-squares fit of
+  (frames received, host time) over the last ~1 s gives the ND-20's sample rate in Mac host time.
+  The driver's zero time stamps come from this fit, so Core Audio runs on the ND-20's clock.
+- **Aligning several streams:** each stream's offset to the master is first estimated from arrival times,
+  then made exact by matching SYT presentation time stamps (equal SYT = same instant, mod 16 bus cycles).
+- **Driver:** routing N → inputs 8N+1..8N+8. The channels to listen on are chosen at build time
+  (`bash scripts/build-driver.sh 64 32 0,1`). If nothing can be received within 1.5 s of starting,
+  the device falls back to the Mac's clock and silent inputs, and logs why.
+- coreaudiod is sandboxed: `Info.plist` lists `IOFireWireUserClient` under `AudioServerPlugIn_IOKitClients`
+  so the plug-in may open FireWire.
+
+## How to read nd20listen's output
+| You see | Meaning |
+|---|---|
+| ~8000 pkts/s on a channel | The ND-20 transmits on that channel (one packet per bus cycle). |
+| 0 pkts/s, "No packets at all" | Nothing is sent on that channel, or reception failed (check the setup messages). |
+| "isoch header byte order: MISSING" | Packets arrive but the header isn't where expected; send the "First packets" dump. |
+| FMT not 0x10 | The ND-20 doesn't use AM824 on this channel; send the dump. |
+| audio channels: 8, labels 0x40 | Standard 24-bit MBLA audio: what we expect for a CB-76Y card. |
+| lost > 0 | Packets were dropped (DBC jumped). A few at start-up are normal; a steady count is not. |
+| meters move with your signal | Audio decodes correctly. Check the WAV files with `-w`. |
+
+## Results
+(fill in after the first run on the Mac Pro)

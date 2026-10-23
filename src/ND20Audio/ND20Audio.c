@@ -1,22 +1,31 @@
 /*
  * ND20Audio: Core Audio (AudioServerPlugIn) driver for an Otari ND-20 network.
  *
- * Stage 1 (this file): publishes one audio device, "Otari ND-20 Network", with
- *   ND20_INPUTS recording channels and ND20_OUTPUTS playback channels, at 44.1 or 48 kHz.
- *   Inputs return silence and outputs are discarded. The FireWire streaming engine will
- *   be connected at the two marked places in DoIOOperation().
+ * Publishes one audio device, "Otari ND-20 Network", with ND20_INPUTS recording channels
+ * and ND20_OUTPUTS playback channels, at 44.1 or 48 kHz.
+ *
+ * Stage 2 (receive): when IO starts, the nd20rx engine listens on the isochronous channels in
+ *   ND20_RX_CHANNELS (ND-20 routing numbers). Routing N fills inputs 8N+1 .. 8N+8. The device
+ *   clock follows the ND-20's stream (the first stream that locks is the clock master).
+ *   If no ND-20 stream can be received, the device falls back to the Mac's clock and silence.
+ *   Outputs are still discarded (transmit is the next stage).
  *
  * Channel names follow ND-20 routing: 8 channels per routing number, e.g. "In 9 (Rt 1 Ch 1)".
+ * Log messages:  log stream --predicate 'subsystem == "com.newconstellation.ND20Audio"'
  *
  * Object layout:   1 = plug-in   2 = device   3 = input stream   4 = output stream
  */
 #include <CoreAudio/AudioServerPlugIn.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <mach/mach_time.h>
+#include <os/log.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
+#include <unistd.h>
+#include "../nd20rx/nd20rx.h"
 
 #ifndef ND20_INPUTS
 #define ND20_INPUTS 64
@@ -24,6 +33,11 @@
 #ifndef ND20_OUTPUTS
 #define ND20_OUTPUTS 32
 #endif
+#ifndef ND20_RX_CHANNELS
+#define ND20_RX_CHANNELS 0,1           /* isochronous channels (= ND-20 routing numbers) to receive */
+#endif
+#define kInputSafetyOffset    384u     /* frames: received audio arrives in 2 ms bursts */
+#define kLockWaitMs           1500     /* how long StartIO waits for the ND-20 clock */
 
 #define kPlugInBundleID       "com.newconstellation.ND20Audio"
 #define kDeviceUID            "ND20Audio_Device_UID"
@@ -54,10 +68,23 @@ static UInt32   gIOCount = 0;               /* number of clients running IO */
 static Boolean  gStreamInActive = true;
 static Boolean  gStreamOutActive = true;
 
-/* Clock (host-time based until the FireWire stream provides real timing). */
+/* Clock: the Mac's host clock (fallback) or the ND-20 stream (when gUseRx). */
 static Float64  gHostTicksPerFrame = 0.0;
 static UInt64   gAnchorHostTime = 0;
 static UInt64   gNumberTimeStamps = 0;
+
+/* FireWire receive (stage 2) */
+static const int  kRxChannels[] = { ND20_RX_CHANNELS };
+#define kNumRxChannels ((int)(sizeof kRxChannels / sizeof kRxChannels[0]))
+static ND20Rx      *gRx = NULL;
+static _Atomic int  gUseRx = 0;        /* 1 while the device clock follows the ND-20 */
+static Float64      gFrameBase = 0.0;  /* master stream frame that is device sample time 0 */
+static UInt64       gZeroHost = 0;     /* host time of the current zero time stamp */
+static os_log_t     gLogObj = NULL;
+
+static void RxLog(const char *msg) {
+    if (gLogObj) os_log(gLogObj, "%{public}s", msg);
+}
 
 /* --------------------------------------------------------- forward decls */
 
@@ -154,6 +181,8 @@ static OSStatus ND20_Initialize(AudioServerPlugInDriverRef inDriver, AudioServer
     if (inDriver != gDriverRef) return kAudioHardwareBadObjectError;
     gHost = inHost;
     UpdateClockForRate();
+    gLogObj = os_log_create(kPlugInBundleID, "driver");
+    nd20rx_set_log(RxLog);
     return kAudioHardwareNoError;
 }
 
@@ -433,8 +462,11 @@ static OSStatus ND20_GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID
         case kAudioDevicePropertyDeviceCanBeDefaultSystemDevice:
             CHECK_SIZE(sizeof(UInt32)); *(UInt32 *)outData = 0; *outSize = sizeof(UInt32); break;
         case kAudioDevicePropertyLatency:
-        case kAudioDevicePropertySafetyOffset:
             CHECK_SIZE(sizeof(UInt32)); *(UInt32 *)outData = 0; *outSize = sizeof(UInt32); break;
+        case kAudioDevicePropertySafetyOffset:
+            CHECK_SIZE(sizeof(UInt32));
+            *(UInt32 *)outData = (a->mScope == kAudioObjectPropertyScopeInput) ? kInputSafetyOffset : 0;
+            *outSize = sizeof(UInt32); break;
         case kAudioDevicePropertyIsHidden:
             CHECK_SIZE(sizeof(UInt32)); *(UInt32 *)outData = 0; *outSize = sizeof(UInt32); break;
         case kAudioDevicePropertyZeroTimeStampPeriod:
@@ -581,17 +613,58 @@ static OSStatus ND20_SetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID
 
 /* ------------------------------------------------------------------- IO */
 
+/* Starts the FireWire receiver and waits for the ND-20 clock. Called without gStateMutex held.
+ * Returns true if the device clock can follow the ND-20. */
+static Boolean StartReceiver(void) {
+    gRx = nd20rx_start(kRxChannels, kNumRxChannels);
+    if (!gRx) {
+        RxLog("ND20Audio: no FireWire receive; running on the Mac clock with silent inputs");
+        return false;
+    }
+    double refF = 0, refH = 0, tpf = 0, rate = 0;
+    for (int waited = 0; waited < kLockWaitMs; waited += 10) {
+        if (nd20rx_clock(gRx, &refF, &refH, &tpf, &rate)) break;
+        usleep(10000);
+    }
+    if (!nd20rx_clock(gRx, &refF, &refH, &tpf, &rate)) {
+        RxLog("ND20Audio: ND-20 stream did not lock in time; running on the Mac clock with silent inputs");
+        nd20rx_stop(gRx);
+        gRx = NULL;
+        return false;
+    }
+    /* Device sample time 0 = the master frame arriving now. */
+    double now = (double)mach_absolute_time();
+    gFrameBase = floor(refF + (now - refH) / tpf);
+    gZeroHost = (UInt64)(refH + (gFrameBase - refF) * tpf);
+
+    char msg[200];
+    snprintf(msg, sizeof msg, "ND20Audio: receiving, clock from channel %d at %.0f Hz",
+             nd20rx_stream_channel(gRx, nd20rx_master_stream(gRx)), rate);
+    RxLog(msg);
+    if (rate != gSampleRate && (rate == 44100.0 || rate == 48000.0) && gHost) {
+        snprintf(msg, sizeof msg, "ND20Audio: ND-20 runs at %.0f Hz but the device is set to %.0f Hz; asking to switch",
+                 rate, gSampleRate);
+        RxLog(msg);
+        gHost->RequestDeviceConfigurationChange(gHost, kObjectID_Device, (UInt64)rate, NULL);
+    }
+    return true;
+}
+
 static OSStatus ND20_StartIO(AudioServerPlugInDriverRef d, AudioObjectID id, UInt32 client) {
     (void)client;
     if (d != gDriverRef) return kAudioHardwareBadObjectError;
     if (id != kObjectID_Device) return kAudioHardwareBadDeviceError;
     pthread_mutex_lock(&gStateMutex);
-    if (gIOCount == 0) {
-        gNumberTimeStamps = 0;
-        gAnchorHostTime = mach_absolute_time();
-        /* FIREWIRE HOOK: start receiving the ND-20 stream(s) here. */
-    }
+    Boolean first = (gIOCount == 0);
     gIOCount++;
+    pthread_mutex_unlock(&gStateMutex);
+    if (!first) return kAudioHardwareNoError;
+
+    Boolean rx = StartReceiver();         /* FIREWIRE: start receiving the ND-20 stream(s) */
+    pthread_mutex_lock(&gStateMutex);
+    gNumberTimeStamps = 0;
+    gAnchorHostTime = mach_absolute_time();
+    atomic_store(&gUseRx, rx ? 1 : 0);
     pthread_mutex_unlock(&gStateMutex);
     return kAudioHardwareNoError;
 }
@@ -602,8 +675,11 @@ static OSStatus ND20_StopIO(AudioServerPlugInDriverRef d, AudioObjectID id, UInt
     if (id != kObjectID_Device) return kAudioHardwareBadDeviceError;
     pthread_mutex_lock(&gStateMutex);
     if (gIOCount > 0) gIOCount--;
-    /* FIREWIRE HOOK: when gIOCount reaches 0, stop the stream(s) here. */
+    Boolean last = (gIOCount == 0);
+    ND20Rx *rx = last ? gRx : NULL;
+    if (last) { atomic_store(&gUseRx, 0); gRx = NULL; }
     pthread_mutex_unlock(&gStateMutex);
+    if (rx) nd20rx_stop(rx);              /* FIREWIRE: stop the stream(s) */
     return kAudioHardwareNoError;
 }
 
@@ -614,12 +690,26 @@ static OSStatus ND20_GetZeroTimeStamp(AudioServerPlugInDriverRef d, AudioObjectI
     if (id != kObjectID_Device) return kAudioHardwareBadDeviceError;
     pthread_mutex_lock(&gStateMutex);
     UInt64 now = mach_absolute_time();
-    Float64 ticksPerPeriod = gHostTicksPerFrame * (Float64)kZeroTimeStampPeriod;
-    UInt64 nextTime = gAnchorHostTime + (UInt64)((Float64)(gNumberTimeStamps + 1) * ticksPerPeriod);
-    if (nextTime <= now) gNumberTimeStamps++;
-    *outSampleTime = (Float64)(gNumberTimeStamps * kZeroTimeStampPeriod);
-    *outHostTime   = gAnchorHostTime + (UInt64)((Float64)gNumberTimeStamps * ticksPerPeriod);
-    *outSeed       = 1;
+    double refF, refH, tpf, rate;
+    if (atomic_load(&gUseRx) && gRx && nd20rx_clock(gRx, &refF, &refH, &tpf, &rate)) {
+        /* ND-20 clock: device frame S arrives at refH + (S + gFrameBase - refF) * tpf. */
+        double current = refF + ((double)now - refH) / tpf - gFrameBase;
+        double next = (double)(gNumberTimeStamps + 1) * kZeroTimeStampPeriod;
+        if (current >= next) {
+            gNumberTimeStamps++;
+            UInt64 h = (UInt64)(refH + (next + gFrameBase - refF) * tpf);
+            gZeroHost = (h > gZeroHost) ? h : gZeroHost + 1;
+        }
+        *outSampleTime = (Float64)(gNumberTimeStamps * kZeroTimeStampPeriod);
+        *outHostTime   = gZeroHost;
+    } else {
+        Float64 ticksPerPeriod = gHostTicksPerFrame * (Float64)kZeroTimeStampPeriod;
+        UInt64 nextTime = gAnchorHostTime + (UInt64)((Float64)(gNumberTimeStamps + 1) * ticksPerPeriod);
+        if (nextTime <= now) gNumberTimeStamps++;
+        *outSampleTime = (Float64)(gNumberTimeStamps * kZeroTimeStampPeriod);
+        *outHostTime   = gAnchorHostTime + (UInt64)((Float64)gNumberTimeStamps * ticksPerPeriod);
+    }
+    *outSeed = 1;
     pthread_mutex_unlock(&gStateMutex);
     return kAudioHardwareNoError;
 }
@@ -649,10 +739,23 @@ static OSStatus ND20_DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID i
     if (d != gDriverRef) return kAudioHardwareBadObjectError;
     if (id != kObjectID_Device) return kAudioHardwareBadDeviceError;
     if (op == kAudioServerPlugInIOOperationReadInput && stream == kObjectID_StreamIn && mainBuf) {
-        /* FIREWIRE HOOK: copy received ND-20 samples (as float) into mainBuf. Silence for now. */
+        /* FIREWIRE: copy received ND-20 samples (as float) into mainBuf. Routing N -> inputs 8N+1..8N+8. */
         memset(mainBuf, 0, (size_t)frames * ND20_INPUTS * kBytesPerSample);
+        ND20Rx *rx = gRx;
+        if (atomic_load(&gUseRx) && rx && info) {
+            int64_t start = (int64_t)llround(info->mInputTime.mSampleTime + gFrameBase);
+            for (int k = 0; k < nd20rx_stream_count(rx); k++) {
+                int routing = nd20rx_stream_channel(rx, k);
+                int firstCh = routing * 8;
+                if (routing < 0 || firstCh >= ND20_INPUTS) continue;
+                int64_t offset;
+                if (!nd20rx_stream_offset(rx, k, &offset)) continue;   /* not aligned yet: silence */
+                int nch = ND20_INPUTS - firstCh < 8 ? ND20_INPUTS - firstCh : 8;
+                nd20rx_read_float(rx, k, start + offset, frames, nch, (float *)mainBuf + firstCh, ND20_INPUTS);
+            }
+        }
     } else if (op == kAudioServerPlugInIOOperationWriteMix && stream == kObjectID_StreamOut) {
-        /* FIREWIRE HOOK: queue mainBuf (float) for transmission to the ND-20 network. Discarded for now. */
+        /* FIREWIRE HOOK (stage 3): queue mainBuf (float) for transmission to the ND-20 network. Discarded for now. */
     }
     return kAudioHardwareNoError;
 }

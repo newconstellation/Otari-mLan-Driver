@@ -8,3 +8,5 @@ clang $FLAGS -o build/nd20probe src/nd20probe/nd20probe.c
 echo "Built build/nd20probe"
 clang $FLAGS -o build/nd20claim src/nd20claim/nd20claim.c
 echo "Built build/nd20claim"
+clang $FLAGS -O2 -o build/nd20listen src/nd20listen/nd20listen.c src/nd20rx/nd20rx.c
+echo "Built build/nd20listen"
