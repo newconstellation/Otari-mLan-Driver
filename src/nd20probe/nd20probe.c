@@ -4,6 +4,8 @@
  * Asks the ND-20 to describe itself. It never writes to the device or changes any setting:
  *   1. Reads the full config ROM (macOS only caches part of it).
  *   1b. Dumps the mLAN register area named in the ROM's unit-dependent leaf (reads only).
+ *   1c. Tries the reads Yamaha's mLAN Enabler 1.2 makes: block read of the address map at
+ *       0xFFFFE0000000, and the NC1/PH1 ("NCP08") fixed registers at 0xFFFFED10xxxx.
  *   2. Reads the IEC 61883-1 plug control registers (oMPR/oPCR, iMPR/iPCR).
  *   3. Sends AV/C STATUS queries: UNIT INFO, SUBUNIT INFO, PLUG INFO,
  *      plug signal formats, and stream-format queries.
@@ -64,6 +66,31 @@ static int read_q_hi(IOFireWireLibDeviceRef dev, io_object_t svc, UInt16 hi, UIn
 
 static int read_q(IOFireWireLibDeviceRef dev, io_object_t svc, UInt32 lo, UInt32 *out) {
     return read_q_hi(dev, svc, 0xFFFF, lo, out);
+}
+
+static int read_block(IOFireWireLibDeviceRef dev, io_object_t svc, UInt16 hi, UInt32 lo, UInt8 *buf, UInt32 *size) {
+    FWAddress a;
+    a.nodeID = 0; a.addressHi = hi; a.addressLo = lo;
+    IOReturn r = (*dev)->Read(dev, svc, &a, buf, size, 0, 0);
+    return r == kIOReturnSuccess ? 0 : (int)r;
+}
+
+static void try_block(IOFireWireLibDeviceRef dev, io_object_t svc, const char *label, UInt16 hi, UInt32 lo, UInt32 len) {
+    UInt8 buf[512];
+    UInt32 size = len > sizeof buf ? sizeof buf : len;
+    printf("%-34s 0x%04x%08x [%3u bytes, block]: ", label, hi, lo, size);
+    int e = read_block(dev, svc, hi, lo, buf, &size);
+    if (e) { printf("err 0x%08x %s\n", e, errname((IOReturn)e)); return; }
+    for (UInt32 i = 0; i < size; i++) { if (i && i % 32 == 0) printf("\n%52s", ""); printf("%02x%s", buf[i], (i % 4 == 3) ? " " : ""); }
+    printf("\n");
+}
+
+static void try_quad(IOFireWireLibDeviceRef dev, io_object_t svc, const char *label, UInt16 hi, UInt32 lo) {
+    UInt32 v = 0;
+    printf("%-34s 0x%04x%08x [quadlet]: ", label, hi, lo);
+    int e = read_q_hi(dev, svc, hi, lo, &v);
+    if (e) printf("err 0x%08x %s\n", e, errname((IOReturn)e));
+    else printf("%08x\n", v);
 }
 
 /* Dump 'count' quadlets from hi:lo, 8 per line, marking unreadable ones as "--------". */
@@ -138,6 +165,32 @@ static void probe_registers(io_object_t svc) {
     UInt16 mhi = 0xFFFF; UInt32 mlo = 0xE0010000;
     if (find_mlan_base(rom, nrom, &mhi, &mlo) == 0) printf("\nmLAN register base from ROM: 0x%04x%08x\n", mhi, mlo);
     else printf("\nmLAN base not found in ROM; using default 0x%04x%08x\n", mhi, mlo);
+
+    printf("\n== Yamaha mLAN Enabler 1.2 reads (NC1/PH1 \"NCP08\" devices) ==\n");
+    try_block(dev, svc, "Address map (Enabler reads 32 B)", 0xFFFF, 0xE0000000, 32);
+    try_quad (dev, svc, "Address map quadlet 0",           0xFFFF, 0xE0000000);
+    try_block(dev, svc, "Firmware version",                0xFFFF, 0xED102000, 32);
+    try_quad (dev, svc, "Firmware version quadlet",        0xFFFF, 0xED102000);
+    try_quad (dev, svc, "PH1 Rx delay offset register",    0xFFFF, 0xED101000);
+    try_quad (dev, svc, "PH1 Tx control register",         0xFFFF, 0xED101010);
+    try_quad (dev, svc, "Error register",                  0xFFFF, 0xED101014);
+    try_block(dev, svc, "mLAN leaf address (block)",       mhi, mlo, 32);
+    {
+        UInt8 map[32]; UInt32 sz = sizeof map;
+        if (read_block(dev, svc, 0xFFFF, 0xE0000000, map, &sz) == 0 && sz == 32) {
+            const char *names[4] = {"BootParam", "Core", "mLAN", "App"};
+            printf("\nAddress map decoded (offsets from 0xFFFFE0000000):\n");
+            for (int k = 0; k < 4; k++) {
+                UInt32 off = (map[k*8] << 24) | (map[k*8+1] << 16) | (map[k*8+2] << 8) | map[k*8+3];
+                UInt32 len = (map[k*8+4] << 24) | (map[k*8+5] << 16) | (map[k*8+6] << 8) | map[k*8+7];
+                printf("  %-9s space: offset 0x%08x size 0x%08x\n", names[k], off, len);
+                if (off != 0xFFFFFFFF && len) {
+                    char lab[48]; snprintf(lab, sizeof lab, "  %s space first 64 B", names[k]);
+                    try_block(dev, svc, lab, 0xFFFF, 0xE0000000 + off, 64);
+                }
+            }
+        }
+    }
 
     printf("\n== mLAN register area, first 1 KB (reads only) ==\n");
     dump_region(dev, svc, mhi, mlo, 256);
@@ -275,7 +328,7 @@ static io_object_t find_child(io_object_t parent, const char *cls) {
 }
 
 int main(void) {
-    printf("nd20probe 0.2 — read-only\n");
+    printf("nd20probe 0.3 — read-only\n");
     io_iterator_t it = 0;
     if (IOServiceGetMatchingServices(kIOMasterPortDefault, IOServiceMatching("IOFireWireDevice"), &it) != KERN_SUCCESS) {
         printf("!! Could not search the FireWire bus\n");
