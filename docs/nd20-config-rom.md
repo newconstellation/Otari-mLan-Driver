@@ -105,3 +105,20 @@ did talk AV/C to the ND-20 when it was detected (it found the audio subunit).
   lock is not proof of a real register.
 - AV/C: IOServiceOpen on IOFireWireAVCUnit / SubUnit **succeeds** (types 0, 1, 12). The AV/C services
   report busy state 1. nd20probe 0.6 calls Apple's AV/C user client directly (open = 0, AVC command = 4).
+
+## nd20probe 0.6 results (2026-10-23): AV/C works via direct user-client calls
+The IOFireWireAVCLib wrapper fails, but IOServiceOpen + IOConnectCall* selectors (0 = open, 4 = command) work.
+| Command | Response | Meaning |
+|---|---|---|
+| UNIT INFO `01 ff 30 ff ff ff ff ff` | `0c ff 30 07 e0 00 a0 de` | STABLE. Unit type 0x1C, company ID **00 A0 DE (Yamaha)** |
+| SUBUNIT INFO `01 ff 31 07 …` | `0c ff 31 07 ff` | no subunits listed |
+| PLUG INFO (unit) | `08 …` | NOT IMPLEMENTED |
+| PLUG INFO (audio subunit 0x08) | timeout | subunit doesn't answer |
+| OUTPUT/INPUT PLUG SIGNAL FORMAT | `08 …` | NOT IMPLEMENTED |
+
+Yamaha's mLAN Tools 1.2 never sends AV/C to NCP08 devices (ExecuteFCP has no callers in the Enabler
+or NCP08 HAL), so the AV/C command set for this firmware isn't documented there.
+
+Otari spec: ND-20B = IEEE 1394a **S400**, 3 ports (2 metal + 1 optical), 32–96 kHz, WCLK in.
+ND-20s network with each other **without a computer**, so a standalone unit probably streams on its own.
+nd20probe 0.7 reads the IRM channel/bandwidth registers and runs an AV/C GENERAL INQUIRY opcode survey.

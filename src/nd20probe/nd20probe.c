@@ -25,6 +25,14 @@
 
 #define OTARI_VENDOR_ID 0x000542
 
+#if defined(kIOFireWireDeviceInterfaceID_v9)
+#  define FW_IID kIOFireWireDeviceInterfaceID_v9
+#elif defined(kIOFireWireDeviceInterfaceID_v8)
+#  define FW_IID kIOFireWireDeviceInterfaceID_v8
+#else
+#  define FW_IID kIOFireWireDeviceInterfaceID_v4
+#endif
+
 static void hexdump(const UInt8 *p, UInt32 n) {
     for (UInt32 i = 0; i < n; i++) printf("%02x ", p[i]);
     printf("\n");
@@ -160,7 +168,7 @@ static void probe_registers(io_object_t svc) {
     if (r != kIOReturnSuccess || !plug) { printf("!! FireWire plug-in failed: 0x%08x\n", r); return; }
 
     IOFireWireLibDeviceRef dev = NULL;
-    (*plug)->QueryInterface(plug, CFUUIDGetUUIDBytes(kIOFireWireDeviceInterfaceID), (LPVOID *)&dev);
+    (*plug)->QueryInterface(plug, CFUUIDGetUUIDBytes(FW_IID), (LPVOID *)&dev);
     IODestroyPlugInInterface(plug);
     if (!dev) { printf("!! No FireWire device interface\n"); return; }
 
@@ -169,6 +177,34 @@ static void probe_registers(io_object_t svc) {
         printf("!! Open failed: 0x%08x (another driver may own the device)\n", r);
         (*dev)->Release(dev);
         return;
+    }
+
+    printf("\n== Bus isochronous resources (IRM registers) ==\n");
+    {
+        UInt32 gen = 0; UInt16 irm = 0, local = 0;
+        (*dev)->GetBusGeneration(dev, &gen);
+        IOReturn ir = (*dev)->GetIRMNodeID(dev, gen, &irm);
+        (*dev)->GetLocalNodeID(dev, &local);
+        printf("  bus generation %u, IRM node 0x%04x %s, our node 0x%04x\n", gen, irm, ir ? "(lookup failed)" : "", local);
+        const char *rn[] = {"BANDWIDTH_AVAILABLE", "CHANNELS_AVAILABLE_HI (ch 0-31)", "CHANNELS_AVAILABLE_LO (ch 32-63)"};
+        UInt32 addrs[] = {0xF0000220, 0xF0000224, 0xF0000228}, vals[3] = {0, 0, 0};
+        for (int k = 0; k < 3; k++) {
+            FWAddress a; a.nodeID = irm; a.addressHi = 0xFFFF; a.addressLo = addrs[k];
+            UInt32 v = 0;
+            IOReturn e = (*dev)->ReadQuadlet(dev, 0, &a, &v, 0, gen);
+            vals[k] = CFSwapInt32BigToHost(v);
+            if (e) printf("  %-34s err 0x%08x %s\n", rn[k], e, errname(e));
+            else printf("  %-34s 0x%08x\n", rn[k], vals[k]);
+        }
+        printf("  Allocated (in-use) isochronous channels:");
+        int any = 0;
+        for (int ch = 0; ch < 64; ch++) {
+            UInt32 word = ch < 32 ? vals[1] : vals[2];
+            int bit = 31 - (ch % 32);              /* a 1 bit means "available" */
+            if (!((word >> bit) & 1)) { printf(" %d", ch); any = 1; }
+        }
+        printf("%s\n", any ? "" : " none");
+        printf("  Bandwidth used: %u of 4915 units\n", 4915 - (vals[0] & 0x1FFF));
     }
 
     printf("\n== Full config ROM (0xFFFFF0000400) ==\n");
@@ -335,6 +371,30 @@ static void avc_direct(io_object_t avcUnit) {
         if (!kr) { printf("  resp: "); for (size_t j = 0; j < rlen && j < 64; j++) printf("%02x ", resp[j]); }
         printf("\n");
     }
+    /* GENERAL INQUIRY (ctype 0x04): "do you implement this opcode?" Never executes anything. */
+    printf("\n  Opcode survey (GENERAL INQUIRY, unit level). Implemented opcodes:\n   ");
+    int impl = 0, timeouts = 0;
+    for (int op = 0; op < 256; op++) {
+        UInt8 cmd[8] = {0x04, 0xFF, (UInt8)op, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+        UInt8 resp[64]; size_t rlen = sizeof resp;
+        kr = IOConnectCallStructMethod(conn, 4, cmd, 8, resp, &rlen);
+        if (kr) { if (kr == (kern_return_t)0xe00002d6) timeouts++; continue; }
+        if ((resp[0] & 0x0F) == 0x0C) { printf(" %02x", op); impl++; }
+    }
+    printf("\n   (%d implemented, %d timeouts)\n", impl, timeouts);
+
+    /* Same survey addressed to the audio subunit (0x08). */
+    printf("  Opcode survey, audio subunit (0x08):\n   ");
+    impl = 0; timeouts = 0;
+    for (int op = 0; op < 256; op++) {
+        UInt8 cmd[8] = {0x04, 0x08, (UInt8)op, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+        UInt8 resp[64]; size_t rlen = sizeof resp;
+        kr = IOConnectCallStructMethod(conn, 4, cmd, 8, resp, &rlen);
+        if (kr) { if (kr == (kern_return_t)0xe00002d6) { timeouts++; if (timeouts > 3) break; } continue; }
+        if ((resp[0] & 0x0F) == 0x0C) { printf(" %02x", op); impl++; }
+    }
+    printf("\n   (%d implemented, %d timeouts%s)\n", impl, timeouts, timeouts > 3 ? ", stopped early: subunit not answering" : "");
+
     IOConnectCallScalarMethod(conn, 1, NULL, 0, NULL, NULL);
     IOServiceClose(conn);
 }
@@ -417,7 +477,7 @@ static io_object_t find_child(io_object_t parent, const char *cls) {
 
 int main(int argc, char **argv) {
     int want_avc = (argc > 1 && strcmp(argv[1], "--avc") == 0);
-    printf("nd20probe 0.6 — read-only\n");
+    printf("nd20probe 0.7 — read-only\n");
     io_iterator_t it = 0;
     if (IOServiceGetMatchingServices(kIOMasterPortDefault, IOServiceMatching("IOFireWireDevice"), &it) != KERN_SUCCESS) {
         printf("!! Could not search the FireWire bus\n");
