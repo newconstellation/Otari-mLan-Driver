@@ -28,7 +28,7 @@ protocol, for interoperability. None of Yamaha's code or files are included here
 - [x] AV/C works through direct user-client calls (UNIT INFO answers with Yamaha's company ID)
 - [x] Found which bus channel the ND-20 uses: channel 0 is allocated (matches ROUTING = 0)
 - [x] Got the ND-20 manual: routing numbers, link groups, switch tables, capacity limits
-- [x] Virtual Core Audio device (`src/ND20Audio/`): builds; passes silence for now (to be tested on the Mac Pro)
+- [x] Virtual Core Audio device (`src/ND20Audio/`): **confirmed showing up on the Mac Pro**; passes silence for now
 - [ ] Receive the ND-20 isochronous stream (decode CIP/AM824) into the virtual device
 - [ ] Transmit a stream on a free routing number for playback
 - [ ] Test with the full 11-unit system

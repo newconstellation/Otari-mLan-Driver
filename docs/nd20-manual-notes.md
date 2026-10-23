@@ -52,3 +52,8 @@ Note: its two CB-76Y cards are **both on ROUTING 0**, which the manual calls a r
 ## Errors (ALARM LED)
 AES input slip, DA power-down (clock problem), 1394 bus/port error (cable change, master clock change),
 1394 audio data error (routing change / lost destination).
+
+## Update 2026-10-23
+- Test unit: slot B ROUTING changed to **1**. The routing-error LED pattern stopped, so slot A sends on routing 0
+  and slot B on routing 1 (expect isochronous channels 0 and 1 if routing = channel).
+- Stage-1 ND20Audio.driver installs and shows up as "Otari ND-20 Network" on the Mac Pro (Mojave).
