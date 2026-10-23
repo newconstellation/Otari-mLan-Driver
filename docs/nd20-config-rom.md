@@ -26,3 +26,14 @@ The ND-20 is an **AV/C + IEC 61883 device (mLAN v1 style)**, not a Yamaha "OGT" 
 - Audio uses IEC 61883-6 AM824 packets, the same as FFADO and Linux snd-firewire handle.
 
 Next: `nd20probe` reads the full ROM (including the 0x38 directory), the PCRs, and the AV/C plug and format info.
+
+## nd20probe 0.1 results (2026-10-23)
+- **Full config ROM** is 64 quadlets (it repeats after that). The unit-dependent directory (key 0x38)
+  holds one leaf: `0000ffff e0010000`, so the **mLAN register base is 0xFFFF E001 0000** (private space).
+- **IEC 61883-1 plug registers (oMPR/iMPR) are not implemented:** both return *address error*.
+  Stream setup does NOT use standard CMP; it must go through the mLAN registers above.
+- **AV/C:** the IOFireWireAVCLib `open()` failed (0xe00002c0, no such device), so every command
+  returned "not open". v0.2 retries with a shared device session.
+
+Revised conclusion: the ND-20 advertises AV/C, but connection and stream control is **mLAN v1
+proprietary**, via the register area at 0xFFFFE0010000. nd20probe 0.2 dumps that area (reads only).

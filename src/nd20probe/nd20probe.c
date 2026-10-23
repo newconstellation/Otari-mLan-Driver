@@ -3,6 +3,7 @@
  *
  * Asks the ND-20 to describe itself. It never writes to the device or changes any setting:
  *   1. Reads the full config ROM (macOS only caches part of it).
+ *   1b. Dumps the mLAN register area named in the ROM's unit-dependent leaf (reads only).
  *   2. Reads the IEC 61883-1 plug control registers (oMPR/oPCR, iMPR/iPCR).
  *   3. Sends AV/C STATUS queries: UNIT INFO, SUBUNIT INFO, PLUG INFO,
  *      plug signal formats, and stream-format queries.
@@ -35,16 +36,75 @@ static UInt32 cfnum(io_object_t obj, const char *key) {
     return v;
 }
 
+static const char *errname(IOReturn r) {
+    switch ((UInt32)r) {
+        case 0xe0008017: return "address error (register not implemented)";
+        case 0xe0008016: return "data error";
+        case 0xe0008014: return "conflict error";
+        case 0xe0008015: return "type error";
+        case 0xe00002c0: return "no such device";
+        case 0xe00002cd: return "device not open";
+        case 0xe00002c5: return "exclusive access (another driver has it)";
+        case 0xe00002d6: return "timeout";
+        default: return "";
+    }
+}
+
 /* ---------- Part 1 & 2: raw FireWire register reads ---------- */
 
-static int read_q(IOFireWireLibDeviceRef dev, io_object_t svc, UInt32 lo, UInt32 *out) {
+static int read_q_hi(IOFireWireLibDeviceRef dev, io_object_t svc, UInt16 hi, UInt32 lo, UInt32 *out) {
     FWAddress a;
-    a.nodeID = 0; a.addressHi = 0xFFFF; a.addressLo = lo;
+    a.nodeID = 0; a.addressHi = hi; a.addressLo = lo;
     UInt32 v = 0;
     IOReturn r = (*dev)->ReadQuadlet(dev, svc, &a, &v, 0 /* failOnReset */, 0);
     if (r != kIOReturnSuccess) return (int)r;
     *out = CFSwapInt32BigToHost(v);
     return 0;
+}
+
+static int read_q(IOFireWireLibDeviceRef dev, io_object_t svc, UInt32 lo, UInt32 *out) {
+    return read_q_hi(dev, svc, 0xFFFF, lo, out);
+}
+
+/* Dump 'count' quadlets from hi:lo, 8 per line, marking unreadable ones as "--------". */
+static void dump_region(IOFireWireLibDeviceRef dev, io_object_t svc, UInt16 hi, UInt32 lo, UInt32 count) {
+    UInt32 errs = 0, firstErr = 0;
+    for (UInt32 i = 0; i < count; i++) {
+        UInt32 v = 0;
+        if (i % 8 == 0) printf("%04x%08x: ", hi, lo + i * 4);
+        int e = read_q_hi(dev, svc, hi, lo + i * 4, &v);
+        if (e) { printf("-------- "); if (!errs++) firstErr = (UInt32)e; }
+        else printf("%08x ", v);
+        if (i % 8 == 7) printf("\n");
+    }
+    if (errs) printf("(%u unreadable quadlets; first error 0x%08x %s)\n", errs, firstErr, errname((IOReturn)firstErr));
+}
+
+/* Find the unit-dependent (key 0x38) directory's address leaf in a config ROM image. */
+static int find_mlan_base(const UInt32 *rom, UInt32 n, UInt16 *hi, UInt32 *lo) {
+    if (n < 6) return -1;
+    UInt32 root = 1 + (rom[0] >> 24);
+    for (UInt32 k = 1; root + k < n && k <= (rom[root] >> 16); k++) {
+        UInt32 e = rom[root + k];
+        if ((e >> 24) != 0xD1) continue;                    /* unit directory */
+        UInt32 ud = root + k + (e & 0xFFFFFF);
+        for (UInt32 m = 1; ud + m < n && m <= (rom[ud] >> 16); m++) {
+            UInt32 f = rom[ud + m];
+            if ((f >> 30) != 3 || ((f >> 24) & 0x3F) != 0x38) continue;
+            UInt32 dd = ud + m + (f & 0xFFFFFF);
+            for (UInt32 j = 1; dd + j < n && j <= (rom[dd] >> 16); j++) {
+                UInt32 g = rom[dd + j];
+                if ((g >> 30) != 2) continue;
+                UInt32 leaf = dd + j + (g & 0xFFFFFF);
+                if (leaf + 2 < n && (rom[leaf] >> 16) >= 2) {
+                    *hi = rom[leaf + 1] & 0xFFFF;
+                    *lo = rom[leaf + 2];
+                    return 0;
+                }
+            }
+        }
+    }
+    return -1;
 }
 
 static void probe_registers(io_object_t svc) {
@@ -66,13 +126,28 @@ static void probe_registers(io_object_t svc) {
     }
 
     printf("\n== Full config ROM (0xFFFFF0000400) ==\n");
-    UInt32 q = 0;
-    for (UInt32 i = 0; i < 256; i++) {
+    UInt32 rom[64], nrom = 0, q = 0;
+    for (UInt32 i = 0; i < 64; i++) {
         int e = read_q(dev, svc, 0xF0000400 + i * 4, &q);
         if (e) { printf("(stopped at quadlet %u, err 0x%08x)\n", i, e); break; }
+        rom[nrom++] = q;
         printf("%08x%s", q, (i % 8 == 7) ? "\n" : " ");
     }
     printf("\n");
+
+    UInt16 mhi = 0xFFFF; UInt32 mlo = 0xE0010000;
+    if (find_mlan_base(rom, nrom, &mhi, &mlo) == 0) printf("\nmLAN register base from ROM: 0x%04x%08x\n", mhi, mlo);
+    else printf("\nmLAN base not found in ROM; using default 0x%04x%08x\n", mhi, mlo);
+
+    printf("\n== mLAN register area, first 1 KB (reads only) ==\n");
+    dump_region(dev, svc, mhi, mlo, 256);
+
+    printf("\n== mLAN register area, sparse map up to +64 KB (first quadlet of each 256-byte block) ==\n");
+    for (UInt32 off = 0x400; off < 0x10000; off += 0x100) {
+        UInt32 v = 0;
+        if (read_q_hi(dev, svc, mhi, mlo + off, &v) == 0) printf("  +0x%05x: %08x\n", off, v);
+    }
+    printf("(blocks not listed did not respond)\n");
 
     printf("\n== IEC 61883-1 plug control registers ==\n");
     struct { const char *name; UInt32 addr; } regs[] = {
@@ -81,7 +156,7 @@ static void probe_registers(io_object_t svc) {
     for (int k = 0; k < 2; k++) {
         UInt32 mpr = 0;
         int e = read_q(dev, svc, regs[k].addr, &mpr);
-        if (e) { printf("%s: read err 0x%08x\n", regs[k].name, e); continue; }
+        if (e) { printf("%s: read err 0x%08x %s\n", regs[k].name, e, errname(e)); continue; }
         UInt32 nplugs = mpr & 0x1F;
         printf("%s = 0x%08x  (rate cap %u, plugs %u", regs[k].name, mpr, mpr >> 30, nplugs);
         if (k == 0) printf(", bcast ch %u", (mpr >> 24) & 0x3F);
@@ -109,7 +184,7 @@ static void avc(IOFireWireAVCLibUnitInterface **u, const char *label, const UInt
     printf("\n-- %s\n   cmd:  ", label);
     hexdump(cmd, len);
     IOReturn r = (*u)->AVCCommand(u, cmd, len, resp, &rlen);
-    if (r != kIOReturnSuccess) { printf("   err:  0x%08x\n", r); return; }
+    if (r != kIOReturnSuccess) { printf("   err:  0x%08x %s\n", r, errname(r)); return; }
     const char *rc = "?";
     switch (resp[0] & 0x0F) {
         case 0x08: rc = "NOT IMPLEMENTED"; break;
@@ -123,7 +198,7 @@ static void avc(IOFireWireAVCLibUnitInterface **u, const char *label, const UInt
     printf("   (%s)\n", rc);
 }
 
-static void probe_avc(io_object_t avcUnit) {
+static void probe_avc(io_object_t avcUnit, io_object_t device) {
     IOCFPlugInInterface **plug = NULL;
     SInt32 score = 0;
     IOReturn r = IOCreatePlugInInterfaceForService(avcUnit, kIOFireWireAVCLibUnitTypeID, kIOCFPlugInInterfaceID, &plug, &score);
@@ -134,8 +209,21 @@ static void probe_avc(io_object_t avcUnit) {
     IODestroyPlugInInterface(plug);
     if (!u) { printf("!! No AV/C unit interface\n"); return; }
 
+    IOFireWireLibDeviceRef dev = NULL;
     r = (*u)->open(u);
-    if (r != kIOReturnSuccess) printf("(AV/C open returned 0x%08x — trying commands anyway)\n", r);
+    printf("AV/C open: 0x%08x %s\n", r, errname(r));
+    if (r != kIOReturnSuccess) {
+        /* Fallback: open the device ourselves and share that session with the AV/C library. */
+        IOCFPlugInInterface **dplug = NULL;
+        if (IOCreatePlugInInterfaceForService(device, kIOFireWireLibTypeID, kIOCFPlugInInterfaceID, &dplug, &score) == kIOReturnSuccess && dplug) {
+            (*dplug)->QueryInterface(dplug, CFUUIDGetUUIDBytes(kIOFireWireDeviceInterfaceID), (LPVOID *)&dev);
+            IODestroyPlugInInterface(dplug);
+        }
+        if (dev && (*dev)->Open(dev) == kIOReturnSuccess) {
+            r = (*u)->openWithSessionRef(u, (*dev)->GetSessionRef(dev));
+            printf("AV/C openWithSessionRef: 0x%08x %s\n", r, errname(r));
+        } else printf("(could not open device for session fallback)\n");
+    }
 
     printf("\n== AV/C status queries ==\n");
     /* ctype 0x01 = STATUS. Subunit byte: 0xFF = unit; 0x08 = audio subunit id 0. */
@@ -169,6 +257,7 @@ static void probe_avc(io_object_t avcUnit) {
 
     (*u)->close(u);
     (*u)->Release(u);
+    if (dev) { (*dev)->Close(dev); (*dev)->Release(dev); }
 }
 
 /* ---------- main ---------- */
@@ -186,7 +275,7 @@ static io_object_t find_child(io_object_t parent, const char *cls) {
 }
 
 int main(void) {
-    printf("nd20probe 0.1 — read-only\n");
+    printf("nd20probe 0.2 — read-only\n");
     io_iterator_t it = 0;
     if (IOServiceGetMatchingServices(kIOMasterPortDefault, IOServiceMatching("IOFireWireDevice"), &it) != KERN_SUCCESS) {
         printf("!! Could not search the FireWire bus\n");
@@ -202,10 +291,10 @@ int main(void) {
         if (vendor != OTARI_VENDOR_ID) { IOObjectRelease(d); continue; }
         found = 1;
         printf("=> Otari device found\n");
-        probe_registers(d);
         io_object_t avcUnit = find_child(d, "IOFireWireAVCUnit");
-        if (avcUnit) { probe_avc(avcUnit); IOObjectRelease(avcUnit); }
+        if (avcUnit) { probe_avc(avcUnit, d); IOObjectRelease(avcUnit); }
         else printf("!! No IOFireWireAVCUnit under this device\n");
+        probe_registers(d);
         IOObjectRelease(d);
     }
     IOObjectRelease(it);

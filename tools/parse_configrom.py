@@ -22,7 +22,8 @@ def run(h):
             elif t==2:
                 j=i+k+v
                 if key==0x0D: print(f'{ind}{name}: 0x{q[j+1]:08x}{q[j+2]:08x}')
-                elif j<len(q): print(f'{ind}{name} (leaf): "{text(j)}"')
+                elif j<len(q) and key==0x01: print(f'{ind}{name} (leaf): "{text(j)}"')
+                elif j<len(q): print(f'{ind}{name} (leaf): ' + ' '.join(f'{x:08x}' for x in q[j+1:j+1+(q[j]>>16)]))
                 else: print(f'{ind}{name} (leaf): (not in dump)')
             else: print(f'{ind}{name}:'); dirwalk(i+k+v,ind+'    ')
     print('Root directory:'); dirwalk(1+bib,'  ')
