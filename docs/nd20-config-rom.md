@@ -94,3 +94,14 @@ New tool **nd20claim** (asks for confirmation): claim, then sweep mLAN/Core spac
 Next (nd20claim 0.3): lock-reads (CAS with compare == new) and other read sizes on mLAN space.
 Next (nd20probe 0.5): find out why macOS won't let us open the AV/C connection, since the kernel itself
 did talk AV/C to the ND-20 when it was detected (it found the audio subunit).
+
+## nd20claim 0.3 / nd20probe 0.5 results (2026-10-23)
+- Block reads of 8, 16 and 268 bytes on mLAN space: address error, even while claimed.
+- **Lock-reads (CAS with compare == new) reported "success, old value == compare"** at every mLAN
+  offset except +0x00 (which held our enabler address, so it returned kIOReturnCannotLock).
+  The registers can't all really hold the test pattern, so the firmware's lock handler probably accepts any
+  address and may have **stored the test pattern** (0x5A5AA5A5C3C33C3C) there. mLAN space is RAM; a
+  **power cycle clears it**. Lock-reads were removed from nd20claim (v0.4). Lesson: on this firmware, a
+  lock is not proof of a real register.
+- AV/C: IOServiceOpen on IOFireWireAVCUnit / SubUnit **succeeds** (types 0, 1, 12). The AV/C services
+  report busy state 1. nd20probe 0.6 calls Apple's AV/C user client directly (open = 0, AVC command = 4).

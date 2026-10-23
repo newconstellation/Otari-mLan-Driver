@@ -310,6 +310,35 @@ static void avc_diag(io_object_t device) {
     }
 }
 
+/* Talk to Apple's AV/C user client directly (selector numbers from Apple's open-source
+   IOFireWireAVC: 0 = open, 1 = close, 4 = AVC command). Only STATUS (read) commands are sent. */
+static void avc_direct(io_object_t avcUnit) {
+    printf("\n== AV/C via direct user-client calls ==\n");
+    io_connect_t conn = 0;
+    kern_return_t kr = IOServiceOpen(avcUnit, mach_task_self(), 12, &conn);
+    if (kr) { printf("  IOServiceOpen failed 0x%08x\n", kr); return; }
+    kr = IOConnectCallScalarMethod(conn, 0, NULL, 0, NULL, NULL);
+    printf("  open (selector 0): 0x%08x %s\n", kr, errname(kr));
+    const UInt8 cmds[][8] = {
+        {0x01, 0xFF, 0x30, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},   /* UNIT INFO */
+        {0x01, 0xFF, 0x31, 0x07, 0xFF, 0xFF, 0xFF, 0xFF},   /* SUBUNIT INFO */
+        {0x01, 0xFF, 0x02, 0x00, 0xFF, 0xFF, 0xFF, 0xFF},   /* PLUG INFO (unit) */
+        {0x01, 0x08, 0x02, 0x00, 0xFF, 0xFF, 0xFF, 0xFF},   /* PLUG INFO (audio subunit) */
+        {0x01, 0xFF, 0x18, 0x00, 0xFF, 0xFF, 0xFF, 0xFF},   /* OUTPUT PLUG SIGNAL FORMAT 0 */
+        {0x01, 0xFF, 0x19, 0x00, 0xFF, 0xFF, 0xFF, 0xFF},   /* INPUT PLUG SIGNAL FORMAT 0 */
+    };
+    const char *names[] = {"UNIT INFO", "SUBUNIT INFO", "PLUG INFO unit", "PLUG INFO audio", "OUT PLUG FMT 0", "IN PLUG FMT 0"};
+    for (int i = 0; i < 6; i++) {
+        UInt8 resp[512]; size_t rlen = sizeof resp;
+        kr = IOConnectCallStructMethod(conn, 4, cmds[i], 8, resp, &rlen);
+        printf("  %-16s 0x%08x %s", names[i], kr, errname(kr));
+        if (!kr) { printf("  resp: "); for (size_t j = 0; j < rlen && j < 64; j++) printf("%02x ", resp[j]); }
+        printf("\n");
+    }
+    IOConnectCallScalarMethod(conn, 1, NULL, 0, NULL, NULL);
+    IOServiceClose(conn);
+}
+
 static void probe_avc(io_object_t avcUnit, io_object_t device) {
     IOCFPlugInInterface **plug = NULL;
     SInt32 score = 0;
@@ -388,7 +417,7 @@ static io_object_t find_child(io_object_t parent, const char *cls) {
 
 int main(int argc, char **argv) {
     int want_avc = (argc > 1 && strcmp(argv[1], "--avc") == 0);
-    printf("nd20probe 0.5 — read-only\n");
+    printf("nd20probe 0.6 — read-only\n");
     io_iterator_t it = 0;
     if (IOServiceGetMatchingServices(kIOMasterPortDefault, IOServiceMatching("IOFireWireDevice"), &it) != KERN_SUCCESS) {
         printf("!! Could not search the FireWire bus\n");
@@ -406,6 +435,7 @@ int main(int argc, char **argv) {
         printf("=> Otari device found\n");
         io_object_t avcUnit = find_child(d, "IOFireWireAVCUnit");
         avc_diag(d);
+        if (avcUnit) avc_direct(avcUnit);
         if (avcUnit) { if (want_avc) probe_avc(avcUnit, d); IOObjectRelease(avcUnit); }
         else printf("!! No IOFireWireAVCUnit under this device\n");
         probe_registers(d);
