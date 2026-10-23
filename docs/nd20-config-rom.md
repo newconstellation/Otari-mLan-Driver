@@ -37,3 +37,14 @@ Next: `nd20probe` reads the full ROM (including the 0x38 directory), the PCRs, a
 
 Revised conclusion: the ND-20 advertises AV/C, but connection and stream control is **mLAN v1
 proprietary**, via the register area at 0xFFFFE0010000. nd20probe 0.2 dumps that area (reads only).
+
+## nd20probe 0.2 results (2026-10-23)
+- Every quadlet read in 0xFFFFE0010000 .. +64 KB returns **address error**, so the area is not readable.
+  Most likely it's a **write-only mailbox**: the host writes mLAN request packets there and the
+  device answers by writing back to the host. That's typical of Yamaha mLAN PH-chip designs.
+- AV/C: IOFireWireAVCLib refuses to open the unit (0xe00002c0) even with a shared device session.
+- ROM tail (quadlets 55–63: `0001004a 40000000 …` `00060000 a8076b24 00000000 40000070 40000080`)
+  is not referenced from the directory tree; meaning unknown.
+
+Next: get the real mLAN v1 protocol from Yamaha's legacy **mLAN Driver/mLAN Tools 1.2.0 for Mac OS X**
+(the generic mLAN driver for PH-chip / third-party devices) instead of probing with writes blind.
