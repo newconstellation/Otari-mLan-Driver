@@ -57,3 +57,17 @@ AES input slip, DA power-down (clock problem), 1394 bus/port error (cable change
 - Test unit: slot B ROUTING changed to **1**. The routing-error LED pattern stopped, so slot A sends on routing 0
   and slot B on routing 1 (expect isochronous channels 0 and 1 if routing = channel).
 - Stage-1 ND20Audio.driver installs and shows up as "Otari ND-20 Network" on the Mac Pro (Mojave).
+
+## D-sub 25 pinout (confirmed in the manual by the user, 2026-10-23)
+The CB-76Y (A/D) uses the **Tascam (AES59) analog layout**: 8 balanced channels, female D-sub 25.
+| Ch | Hot | Cold | Gnd |
+|---|---|---|---|
+| 1 | 24 | 12 | 25 |
+| 2 | 10 | 23 | 11 |
+| 3 | 21 | 9 | 22 |
+| 4 | 7 | 20 | 8 |
+| 5 | 18 | 6 | 19 |
+| 6 | 4 | 17 | 5 |
+| 7 | 15 | 3 | 16 |
+| 8 | 1 | 14 | 2 |
+Pin 13: not connected. Standard Tascam-wired analog snakes fit directly.
