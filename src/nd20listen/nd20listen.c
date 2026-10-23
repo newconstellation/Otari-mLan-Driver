@@ -161,9 +161,46 @@ static int parseChannels(const char *arg, int *ch, int max) {
 
 static void usage(void) {
     printf("usage: nd20listen [-c 0,1] [-t seconds] [-w file_prefix]\n"
+           "       nd20listen -s [seconds_per_group]\n"
            "  -c  isochronous channels to listen on (ND-20 routing numbers). Default 0,1\n"
            "  -t  seconds to listen (default 10; 0 = until Ctrl-C)\n"
-           "  -w  also record each channel to <prefix>_ch<N>.wav (24-bit)\n");
+           "  -w  also record each channel to <prefix>_ch<N>.wav (24-bit)\n"
+           "  -s  sweep all 64 channels, 16 at a time (default 3 s each), and list which carry traffic\n");
+}
+
+/* Sweep all 64 isochronous channels and report every one that carries packets. */
+static int sweep(int secs) {
+    printf("nd20listen %s sweep: receive only, all 64 channels, %d s per group of 16\n", VERSION, secs);
+    printf("Use the CB-181 during the sweep (turn GAIN, press ROUTING MONITOR) so its traffic shows up.\n\n");
+    nd20rx_set_log(NULL);
+    int found = 0;
+    for (int g = 0; g < 4 && !gQuit; g++) {
+        int ch[16];
+        for (int i = 0; i < 16; i++) ch[i] = g * 16 + i;
+        printf("Channels %d-%d ...\n", g * 16, g * 16 + 15);
+        fflush(stdout);
+        ND20Rx *rx = nd20rx_start(ch, 16);
+        if (!rx) { printf("!! could not listen on this group\n"); continue; }
+        for (int t = 0; t < secs * 4 && !gQuit; t++) usleep(250000);
+        for (int i = 0; i < 16; i++) {
+            ND20RxStats st;
+            nd20rx_get_stats(rx, i, &st, 0);
+            if (st.packets == 0) continue;
+            found++;
+            printf("\n  ch %-2d  %.0f pkts/s  audio %llu  empty %llu  not-AM824 %llu  not-understood %llu\n",
+                   st.fwChannel, (double)st.packets / secs, (unsigned long long)st.dataPackets,
+                   (unsigned long long)st.emptyPackets, (unsigned long long)st.notAM824, (unsigned long long)st.badPackets);
+            if (st.audioSlots > 0)
+                printf("         %.0f Hz, %d audio channels, DBS %u, SID %u\n", st.sampleRate, st.audioSlots, st.dbs, st.sid);
+            if (st.notAM824 || st.badPackets || st.audioSlots == 0) {
+                printf("         CIP %08x %08x  FMT 0x%02x  header order %s\n", st.lastCIP0, st.lastCIP1, st.fmt, orderName(st.headerOrder));
+                printFirstPackets(&st);
+            }
+        }
+        nd20rx_stop(rx);
+    }
+    printf("\n%d channel(s) with traffic.\nDone.\n", found);
+    return 0;
 }
 
 int main(int argc, char **argv) {
@@ -180,6 +217,10 @@ int main(int argc, char **argv) {
             seconds = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "-w") && i + 1 < argc) {
             wavPrefix = argv[++i];
+        } else if (!strcmp(argv[i], "-s")) {
+            int s = (i + 1 < argc) ? atoi(argv[i + 1]) : 0;
+            signal(SIGINT, onSignal);
+            return sweep(s > 0 ? s : 3);
         } else { usage(); return 1; }
     }
 

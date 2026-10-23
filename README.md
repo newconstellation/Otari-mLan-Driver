@@ -32,6 +32,7 @@ protocol, for interoperability. None of Yamaha's code or files are included here
 - [x] Receive engine (`src/nd20rx/`) and `nd20listen` tool: listen on isochronous channels, decode CIP/AM824 (written, **needs first test on the Mac Pro**)
 - [x] Driver stage 2: received inputs wired into `ND20Audio` (routing N → inputs 8N+1..8N+8, clock follows the ND-20) (**needs test**)
 - [ ] Transmit a stream on a free routing number for playback
+- [ ] CB-181 remote: discover its protocol (`nd20remote`, `nd20listen -s`), then a software remote with an all-channel meter bridge (see `docs/cb181-notes.md`)
 - [ ] Test with the full 11-unit system
 - [ ] Step 1 tool: find the ND-20 and read its registers
 - [ ] Send audio to the ND-20
@@ -44,6 +45,7 @@ protocol, for interoperability. None of Yamaha's code or files are included here
 - `src/ND20Audio/`: the Core Audio driver (AudioServerPlugIn); build with `scripts/build-driver.sh`
 - `src/nd20rx/`: receive engine shared by the tool and the driver (IOFireWireLib isochronous receive, CIP/AM824 decode, clock recovery)
 - `src/nd20listen/`: receive-only tool that shows what the ND-20 sends (build with `scripts/build-probe.sh`)
+- `src/nd20remote/`: CB-181 remote discovery tool (scan / watch / pose)
 - `src/nd20claim/`: claims the device, reads the control spaces, then releases the claim (one reversible write)
 - `tools/`: config ROM decoder
 - `tools/re/`: analysis helpers (unpack .pkg installers on any OS)
