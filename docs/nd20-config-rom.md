@@ -68,3 +68,16 @@ Next: get the real mLAN v1 protocol from Yamaha's legacy **mLAN Driver/mLAN Tool
   Core space version at Core+0xC0FFC0.
 
 nd20probe 0.4 sweeps each space with 4-byte block reads.
+
+## nd20probe 0.4 results (2026-10-23)
+- **BootParam space is readable** (flash): mostly erased `ffffffff`, one value `0060ffff` at +0xF0
+  (inside the HAL-dependent area at +0xC0), and the **init table at +0x300 is all zero** (not valid).
+- **Core and mLAN spaces return address error** for every 4-byte block read and quadlet read.
+
+### Why (from mLAN Enabler 1.2, CTransporter::SetEnablerAddress)
+Before touching a device, the Enabler **claims** it with a 64-bit lock (compare-and-swap) on
+mLAN space + 0x00 (enabler address): compare `0xFFFF000000000000` (unowned), swap in
+`(host node ID << 48) | host callback address`. It retries 5× on busy/conflict.
+ClearEnablerAddress swaps it back. Most likely the ND-20 rejects other access to Core/mLAN until it's claimed.
+
+New tool **nd20claim** (asks for confirmation): claim, then sweep mLAN/Core spaces, then release.
