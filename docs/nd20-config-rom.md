@@ -149,3 +149,7 @@ broadcast and transmit its own stream for a slot whose ROUTING points at the Mac
   plus this unit: 11 units total.
 - Goal: use the ND-20 network as a **64-in / 64-out recording interface** for Pro Tools on the Mac Pro.
 - Only one ND-20 was visible on the Mac's FireWire bus during testing.
+- Topology: the other units are FireWire daisy-chained, with 3 output units linked by fiber (optical S400) and then
+  daisy-chained, so it's all one 1394 bus. The other 10 units are **not available right now**; they'll be added later.
+- There is also an **ND-20 remote controller** (model and connection to be confirmed). It's a potential source of the
+  control protocol (e.g. via the SERIAL I/O port).
