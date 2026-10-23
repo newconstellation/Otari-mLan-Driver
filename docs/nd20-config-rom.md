@@ -141,3 +141,11 @@ broadcast and transmit its own stream for a slot whose ROUTING points at the Mac
   Channel 31 = standard broadcast channel. **Channel 0 is most likely the ND-20 (UNIT ID = 00)**,
   which fits the "channel derived from Unit ID" hypothesis. No bandwidth booked.
 - Config ROM quadlet 59 changed (00060000 → 00010000) between runs, so it's a live status value.
+
+## System facts from the user (2026-10-23)
+- Unit on the Mac's bus: **2 × CB-76Y** (8-ch 24-bit A/D, D-sub 25) = 16 line inputs. SETUP DIP switches: **all OFF**.
+  ROUTING A–D = 0, UNIT ID = 00.
+- Wider system: 4 × ND-20 with mic preamp cards (64 mic inputs total), 6 × ND-20 with line-out (D/A) cards,
+  plus this unit: 11 units total.
+- Goal: use the ND-20 network as a **64-in / 64-out recording interface** for Pro Tools on the Mac Pro.
+- Only one ND-20 was visible on the Mac's FireWire bus during testing.
