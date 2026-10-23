@@ -17,8 +17,9 @@ protocol, for interoperability. None of Yamaha's code or files are included here
 
 ## Status
 - [x] Unpacked and mapped Yamaha FW Driver 1.7.5 (see `docs/`)
-- [ ] Capture the ND-20 config ROM (`scripts/capture-nd20.sh`)
-- [ ] Decide control path: mLAN v2 "OGT" registers vs. mLAN v1
+- [x] Capture the ND-20 config ROM: it is an **AV/C + IEC 61883** device (see `docs/nd20-config-rom.md`)
+- [x] Decide control path: standard AV/C + plug control registers (not Yamaha OGT)
+- [ ] Run `nd20probe` (read-only) to get plugs, channels and stream formats
 - [ ] Step 1 tool: find the ND-20 and read its registers
 - [ ] Receive audio from the ND-20
 - [ ] Send audio to the ND-20
@@ -27,4 +28,6 @@ protocol, for interoperability. None of Yamaha's code or files are included here
 ## Layout
 - `docs/`: reverse-engineering notes
 - `scripts/`: helpers to run on the Mac Pro
+- `src/nd20probe/`: read-only probe tool (build with `scripts/build-probe.sh`)
+- `tools/`: config ROM decoder
 - `tools/re/`: analysis helpers (unpack .pkg installers on any OS)
