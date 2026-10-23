@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <strings.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>
 #include <IOKit/IOCFPlugIn.h>
@@ -98,14 +99,16 @@ static UInt32 cfnum(io_object_t obj, const char *key) {
 
 int main(int argc, char **argv) {
     int yes = (argc > 1 && strcmp(argv[1], "--yes") == 0);
-    printf("nd20claim 0.1\n");
+    setvbuf(stdout, NULL, _IONBF, 0);   /* write output immediately, even if something crashes */
+    printf("nd20claim 0.2\n");
     if (!yes) {
         fprintf(stderr,
             "This tool makes ONE reversible write to the ND-20: it claims the device the way Yamaha's\n"
             "mLAN software did, reads its control registers, then releases the claim.\n"
             "Type YES and press Return to continue: ");
         char buf[16] = {0};
-        if (!fgets(buf, sizeof buf, stdin) || strncmp(buf, "YES", 3) != 0) { fprintf(stderr, "Cancelled.\n"); return 1; }
+        if (!fgets(buf, sizeof buf, stdin) || strncasecmp(buf, "YES", 3) != 0) { fprintf(stderr, "Cancelled.\n"); printf("Cancelled at the YES prompt.\n"); return 1; }
+        printf("Confirmed.\n");
     }
 
     io_iterator_t it = 0;
