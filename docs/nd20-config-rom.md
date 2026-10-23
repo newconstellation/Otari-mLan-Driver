@@ -134,3 +134,10 @@ Working hypothesis: native ND-20 networking needs no computer, so each unit prob
 inputs on an isochronous channel derived from its UNIT ID, and each slot's ROUTING switch picks which
 unit's stream that slot plays. If so, a Mac driver can act like "another ND-20": receive the ND-20's
 broadcast and transmit its own stream for a slot whose ROUTING points at the Mac's unit ID.
+
+## nd20probe 0.7 results (2026-10-23)
+- AV/C GENERAL INQUIRY: no opcodes reported as implemented (inquiry ctype not supported by this firmware).
+- IRM (Mac is IRM, node 0xffc2): **isochronous channels 0 and 31 allocated**; bandwidth 4915/4915 free.
+  Channel 31 = standard broadcast channel. **Channel 0 is most likely the ND-20 (UNIT ID = 00)**,
+  which fits the "channel derived from Unit ID" hypothesis. No bandwidth booked.
+- Config ROM quadlet 59 changed (00060000 → 00010000) between runs, so it's a live status value.
