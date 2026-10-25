@@ -65,3 +65,6 @@ The kernel ignores the completion status for reads and locks and always answers 
    status-only, changes nothing; tells whether control goes through FCP.
 3. If still opaque: capture remote↔ND-20 traffic with a **bus analyser** (Linux PC + TI PCILynx card + `nosy`),
    or read the CB-181's firmware chip (EPROM/flash) with a programmer and study it.
+- ROUTING MONITOR on routing 0 (tone on inputs 1–8): the **CB-181 meter showed nothing**; only the ND-20's
+  own front-panel LEDs showed the tone. Either the remote's monitor only works for mic-amp modules, or it
+  relies on the same stream the ND-20 never started (the Mac saw 0 packets at the same time).
