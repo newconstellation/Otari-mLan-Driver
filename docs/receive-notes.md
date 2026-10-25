@@ -64,4 +64,4 @@
 - Follow-up tests, same day: ND-20 **power-cycled** with the chain connected: 0 packets.
   (A second run labelled "master" was taken with SETUP 1-5 still OFF: 0 packets; the master test is **not done yet**.)
   **ROUTING MONITOR** on routing 0 from the CB-181 during listening: 0 packets for the first 11 s captured.
-  The bus-reset idea is ruled out; hypothesis 1 (no clock master: SETUP 1-5 ON) is **still open**. Next (2026-10-26): add a CB-77A line-out ND-20 with a slot on routing 0.
+  The bus-reset idea is ruled out. **SETUP 1-5 ON** (link-group master) + power-cycle, tone on 1–8: **0 packets** (8 s captured), so hypothesis 1 is ruled out too. Next (2026-10-26): add a CB-77A line-out ND-20 with a slot on routing 0.
