@@ -62,6 +62,6 @@
      during nd20listen; then a line-out ND-20 with a slot on routing 0.
   3. If a second ND-20 makes it stream, the "request" between units is the next protocol to capture.
 - Follow-up tests, same day: ND-20 **power-cycled** with the chain connected: 0 packets.
-  **SETUP 1-5 ON** (link-group master) + power-cycle: 0 packets. **ROUTING MONITOR** on routing 0 from the
-  CB-181 during listening: 0 packets for the first 11 s captured. Hypothesis 1 (no clock master) and the
-  bus-reset idea are ruled out. Next (2026-10-26): add a CB-77A line-out ND-20 with a slot on routing 0.
+  (A second run labelled "master" was taken with SETUP 1-5 still OFF: 0 packets; the master test is **not done yet**.)
+  **ROUTING MONITOR** on routing 0 from the CB-181 during listening: 0 packets for the first 11 s captured.
+  The bus-reset idea is ruled out; hypothesis 1 (no clock master: SETUP 1-5 ON) is **still open**. Next (2026-10-26): add a CB-77A line-out ND-20 with a slot on routing 0.
