@@ -48,3 +48,16 @@
   (e.g. nothing on the network plays its routing numbers) or nd20rx isn't receiving. nd20listen 0.2 adds:
   sweep in groups of 6, a "DMA slots used" check (data reached memory even if callbacks didn't run),
   and `-a`, a second independent receive path through Apple's async stream listener.
+
+### 2026-10-25 with tone on inputs 1–8 (nd20listen 0.2)
+- nd20rx on channels 0 and 1: **0 packets**. Apple's own async stream listener on 0 and 1: **0 packets**.
+  Sweep of all 64 channels in groups of 6 (all opened): **0 packets, no data in any DMA buffer**.
+- Two independent receive paths agree: **the ND-20 is not putting any isochronous packets on the bus.**
+  The receive code is not the suspect; the question is what makes an ND-20 start transmitting.
+- Hypotheses, cheapest test first:
+  1. **No clock master:** the unit is a link-group slave (SETUP 1-5 OFF) and nothing on the bus is master,
+     so it may wait for a master's clock and never transmit. Test: SETUP 1-5 ON, power-cycle, listen again.
+  2. **Transmits on demand:** an ND-20 may only stream a routing number when something wants it
+     (an output module on that routing, or the CB-181's ROUTING MONITOR). Test: ROUTING MONITOR on routing 0
+     during nd20listen; then a line-out ND-20 with a slot on routing 0.
+  3. If a second ND-20 makes it stream, the "request" between units is the next protocol to capture.
