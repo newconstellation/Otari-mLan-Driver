@@ -38,4 +38,13 @@
 | meters move with your signal | Audio decodes correctly. Check the WAV files with `-w`. |
 
 ## Results
-(fill in after the first run on the Mac Pro)
+### 2026-10-25 sweep (nd20listen -s, groups of 16)
+- In every group only the first **7 channels** opened; the rest failed with `0xe00002be` (no resources).
+  The Mac Pro's FireWire controller has a limited number of isochronous **receive contexts** (7 free; Apple
+  probably keeps one for broadcast channel 31). One context per channel means **at most 7 routing numbers
+  = 56 inputs**. 64 inputs (8 routings) or the full 96-channel network will need **multi-channel receive**
+  (one OHCI context receiving several channels). To solve before the full system goes on.
+- **No packets on any channel that opened, including 0 and 1.** Either the ND-20 isn't transmitting
+  (e.g. nothing on the network plays its routing numbers) or nd20rx isn't receiving. nd20listen 0.2 adds:
+  sweep in groups of 6, a "DMA slots used" check (data reached memory even if callbacks didn't run),
+  and `-a`, a second independent receive path through Apple's async stream listener.

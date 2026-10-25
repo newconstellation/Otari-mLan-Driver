@@ -19,8 +19,13 @@
 #include <signal.h>
 #include <unistd.h>
 #include <math.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/IOKitLib.h>
+#include <IOKit/IOCFPlugIn.h>
+#include <IOKit/firewire/IOFireWireLib.h>
+#include <IOKit/firewire/IOFireWireLibIsoch.h>
 
-#define VERSION "0.1"
+#define VERSION "0.2"
 
 static volatile sig_atomic_t gQuit = 0;
 static void onSignal(int sig) { (void)sig; gQuit = 1; }
@@ -165,31 +170,39 @@ static void usage(void) {
            "  -c  isochronous channels to listen on (ND-20 routing numbers). Default 0,1\n"
            "  -t  seconds to listen (default 10; 0 = until Ctrl-C)\n"
            "  -w  also record each channel to <prefix>_ch<N>.wav (24-bit)\n"
-           "  -s  sweep all 64 channels, 16 at a time (default 3 s each), and list which carry traffic\n");
+           "  -s  sweep all 64 channels, a few at a time (default 3 s each), and list which carry traffic\n"
+           "  -a  use Apple's async stream listener instead (second, independent receive path)\n");
 }
 
-/* Sweep all 64 isochronous channels and report every one that carries packets. */
+/* Sweep all 64 isochronous channels and report every one that carries packets.
+ * The Mac's FireWire chip has a limited number of receive contexts (7 were free on the Mac Pro),
+ * so channels are tried in groups of GROUPSZ. */
+#define GROUPSZ 6
 static int sweep(int secs) {
-    printf("nd20listen %s sweep: receive only, all 64 channels, %d s per group of 16\n", VERSION, secs);
+    printf("nd20listen %s sweep: receive only, all 64 channels, %d s per group of %d\n", VERSION, secs, GROUPSZ);
     printf("Use the CB-181 during the sweep (turn GAIN, press ROUTING MONITOR) so its traffic shows up.\n\n");
-    nd20rx_set_log(NULL);
+    nd20rx_set_log(logLine);
     int found = 0;
-    for (int g = 0; g < 4 && !gQuit; g++) {
-        int ch[16];
-        for (int i = 0; i < 16; i++) ch[i] = g * 16 + i;
-        printf("Channels %d-%d ...\n", g * 16, g * 16 + 15);
+    for (int first = 0; first < 64 && !gQuit; first += GROUPSZ) {
+        int ch[GROUPSZ], n = 0;
+        for (int c = first; c < first + GROUPSZ && c < 64; c++) ch[n++] = c;
+        printf("Channels %d-%d ...\n", ch[0], ch[n - 1]);
         fflush(stdout);
-        ND20Rx *rx = nd20rx_start(ch, 16);
+        ND20Rx *rx = nd20rx_start(ch, n);
         if (!rx) { printf("!! could not listen on this group\n"); continue; }
         for (int t = 0; t < secs * 4 && !gQuit; t++) usleep(250000);
-        for (int i = 0; i < 16; i++) {
+        for (int i = 0; i < n; i++) {
             ND20RxStats st;
             nd20rx_get_stats(rx, i, &st, 0);
-            if (st.packets == 0) continue;
+            int act = nd20rx_buffer_activity(rx, i);
+            if (st.packets == 0 && act == 0) continue;
             found++;
-            printf("\n  ch %-2d  %.0f pkts/s  audio %llu  empty %llu  not-AM824 %llu  not-understood %llu\n",
+            printf("\n  ch %-2d  %.0f pkts/s  audio %llu  empty %llu  not-AM824 %llu  not-understood %llu  (DMA slots used: %d)\n",
                    st.fwChannel, (double)st.packets / secs, (unsigned long long)st.dataPackets,
-                   (unsigned long long)st.emptyPackets, (unsigned long long)st.notAM824, (unsigned long long)st.badPackets);
+                   (unsigned long long)st.emptyPackets, (unsigned long long)st.notAM824,
+                   (unsigned long long)st.badPackets, act);
+            if (st.packets == 0)
+                printf("         !! data reached memory but no callbacks ran: receive-engine problem, not the ND-20\n");
             if (st.audioSlots > 0)
                 printf("         %.0f Hz, %d audio channels, DBS %u, SID %u\n", st.sampleRate, st.audioSlots, st.dbs, st.sid);
             if (st.notAM824 || st.badPackets || st.audioSlots == 0) {
@@ -203,11 +216,87 @@ static int sweep(int secs) {
     return 0;
 }
 
+/* ---------------------------------------------------------------- second receive path (Apple's async stream listener)
+ * Independent of nd20rx: Apple's kernel receives the channel and hands each packet over.
+ * Used to tell "the ND-20 isn't sending" apart from "nd20rx isn't receiving". */
+
+typedef struct { int channel; uint64_t packets; uint32_t lastLen; int shown; } AsListen;
+static IOFireWireLibDeviceRef gAsDev = NULL;
+
+static UInt32 asHandler(IOFWAsyncStreamListenerInterfaceRef l, FWClientCommandID cmd, UInt32 size, void *packet, void *refcon) {
+    AsListen *a = (AsListen *)refcon;
+    a->packets++;
+    a->lastLen = size;
+    if (a->shown < 3) {
+        a->shown++;
+        const uint8_t *p = (const uint8_t *)packet;
+        printf("  ch %d packet (%u bytes): ", a->channel, size);
+        for (UInt32 i = 0; i < size && i < 48; i++) printf("%02x%s", p[i], (i % 4 == 3) ? " " : "");
+        printf("\n");
+    }
+    (*l)->ClientCommandIsComplete(l, cmd, kIOReturnSuccess);
+    return 0;
+}
+
+static int asyncListen(const int *channels, int nch, int secs) {
+    printf("nd20listen %s: second receive path (Apple async stream listener), %d s\n", VERSION, secs);
+    io_object_t svc = IOServiceGetMatchingService(kIOMasterPortDefault, IOServiceMatching("IOFireWireLocalNode"));
+    if (!svc) { printf("!! FireWire node not found\n"); return 2; }
+    IOCFPlugInInterface **plug = NULL;
+    SInt32 score = 0;
+    if (IOCreatePlugInInterfaceForService(svc, kIOFireWireLibTypeID, kIOCFPlugInInterfaceID, &plug, &score) || !plug) {
+        printf("!! cannot load IOFireWireLib\n"); return 2;
+    }
+    (*plug)->QueryInterface(plug, CFUUIDGetUUIDBytes(kIOFireWireDeviceInterfaceID_v9), (LPVOID *)&gAsDev);
+    if (!gAsDev) { printf("!! IOFireWireLib v9 interface missing\n"); return 2; }
+    IOReturn r = (*gAsDev)->Open(gAsDev);
+    if (r) { printf("!! Open failed 0x%08x\n", r); return 2; }
+    (*gAsDev)->AddCallbackDispatcherToRunLoop(gAsDev, CFRunLoopGetCurrent());
+    (*gAsDev)->AddIsochCallbackDispatcherToRunLoop(gAsDev, CFRunLoopGetCurrent());
+
+    AsListen st[ND20RX_MAX_STREAMS];
+    IOFWAsyncStreamListenerInterfaceRef lis[ND20RX_MAX_STREAMS];
+    memset(st, 0, sizeof st);
+    memset(lis, 0, sizeof lis);
+    for (int i = 0; i < nch; i++) {
+        st[i].channel = channels[i];
+        lis[i] = (*gAsDev)->CreateAsyncStreamListener(gAsDev, (UInt32)channels[i], asHandler, &st[i], 512 * 1024,
+                                                      CFUUIDGetUUIDBytes(kIOFireWireAsyncStreamListenerInterfaceID));
+        if (!lis[i]) { printf("!! channel %d: CreateAsyncStreamListener failed\n", channels[i]); continue; }
+        (*lis[i])->TurnOnNotification(lis[i]);
+        printf("listening on channel %d\n", channels[i]);
+    }
+    uint64_t prev[ND20RX_MAX_STREAMS] = {0};
+    for (int t = 1; t <= secs && !gQuit; t++) {
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1.0, false);
+        printf("---- %d s:", t);
+        for (int i = 0; i < nch; i++) {
+            printf("  ch %d: %llu pkts/s", st[i].channel, (unsigned long long)(st[i].packets - prev[i]));
+            prev[i] = st[i].packets;
+        }
+        printf("\n");
+        fflush(stdout);
+    }
+    printf("\nTotals:");
+    for (int i = 0; i < nch; i++) printf("  ch %d: %llu packets", st[i].channel, (unsigned long long)st[i].packets);
+    printf("\n");
+    for (int i = 0; i < nch; i++) if (lis[i]) { (*lis[i])->TurnOffNotification(lis[i]); (*lis[i])->Release(lis[i]); }
+    (*gAsDev)->RemoveIsochCallbackDispatcherFromRunLoop(gAsDev);
+    (*gAsDev)->RemoveCallbackDispatcherFromRunLoop(gAsDev);
+    (*gAsDev)->Close(gAsDev);
+    (*gAsDev)->Release(gAsDev);
+    IODestroyPlugInInterface(plug);
+    IOObjectRelease(svc);
+    printf("Done.\n");
+    return 0;
+}
+
 int main(int argc, char **argv) {
     int channels[ND20RX_MAX_STREAMS] = {0, 1};
     int nch = 2;
     int seconds = 10;
     const char *wavPrefix = NULL;
+    int useAsync = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-c") && i + 1 < argc) {
@@ -217,12 +306,16 @@ int main(int argc, char **argv) {
             seconds = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "-w") && i + 1 < argc) {
             wavPrefix = argv[++i];
+        } else if (!strcmp(argv[i], "-a")) {
+            useAsync = 1;
         } else if (!strcmp(argv[i], "-s")) {
             int s = (i + 1 < argc) ? atoi(argv[i + 1]) : 0;
             signal(SIGINT, onSignal);
             return sweep(s > 0 ? s : 3);
         } else { usage(); return 1; }
     }
+
+    if (useAsync) { signal(SIGINT, onSignal); return asyncListen(channels, nch, seconds > 0 ? seconds : 10); }
 
     printf("nd20listen %s: receive only (nothing is written to the ND-20, no bandwidth is booked)\n", VERSION);
     printf("Listening on channel(s):");

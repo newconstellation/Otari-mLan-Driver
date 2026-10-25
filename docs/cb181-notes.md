@@ -43,5 +43,25 @@ each backing store at the start of a 4 GB virtual reservation and mirrors regist
 store + absolute address, so locks (e.g. the Enabler claim at mLAN+0x00) behave like the real ND-20.
 The kernel ignores the completion status for reads and locks and always answers from the backing store.
 
-## Results
-(fill in after running on the Mac Pro)
+## Results (2026-10-25, Mac Pro, one ND-20 with 2 × CB-76Y + CB-181, no mic-amp card)
+- **scan:** the CB-181 is FireWire node 0xffc0, vendor 0x000542 (OTARI), GUID **0x0005420202000006**,
+  unit spec 0x00A02D / version 0x010001 (AV/C), **model ID 0x000002**, plus an unknown immediate entry
+  key 0x30 = 0x64 (100). Its config ROM text reads **"CB-178 For ND-20"**: the CB-181 is a CB-178 internally.
+  Bus options 0x20006211 (not IRM/cycle-master capable). Apple's probe: AV/C unit type 7, subunit type 4,
+  supportsFCP = No.
+- GUIDs look structured: 0x000542 (Otari) | 0x02 | **0x02 = remote / 0x03 = ND-20B** | serial
+  (ND-20: 0x0005420203000048). The remote probably finds ND-20s by GUID or root vendor/model, which the Mac
+  can't fake.
+- **watch:** 0 events. The remote sends nothing to the Mac (no broadcast writes in the ND-20 ranges).
+- **pose:** 0 events. The remote ignored the Mac posing as an ND-20 (as feared: root vendor/GUID still Apple).
+- **sweep:** 0 channels with traffic, but only 7 of every 16 channels could be opened (see receive-notes).
+- The remote could not use GAIN / PAD / +48V with **no mic-amp card on the network**: those functions only
+  apply to CB-76X mic-amp modules, so this unit gives the remote nothing to control.
+- ND-20 ROM quadlet 59 read 0x00030000 this time (live status value, seen 1/3/6 so far).
+
+## Revised plan
+1. Put **one mic-amp ND-20** on the bus with the remote; repeat the sweep (meters/monitor may stream).
+2. Probe AV/C **VENDOR-DEPENDENT STATUS** (opcode 0x00, company 0x000542 and 0x00A0DE) on the ND-20:
+   status-only, changes nothing; tells whether control goes through FCP.
+3. If still opaque: capture remote↔ND-20 traffic with a **bus analyser** (Linux PC + TI PCILynx card + `nosy`),
+   or read the CB-181's firmware chip (EPROM/flash) with a programmer and study it.

@@ -66,6 +66,10 @@ int      nd20rx_stream_channel(ND20Rx *rx, int stream);
 int      nd20rx_get_stats(ND20Rx *rx, int stream, ND20RxStats *out, int resetPeaks);
 uint64_t nd20rx_frames_written(ND20Rx *rx, int stream);
 
+/* Diagnostics: how many receive slots have had data written into them by the DMA (whether or not
+ * any callback ran). 0 = nothing has reached memory. */
+int      nd20rx_buffer_activity(ND20Rx *rx, int stream);
+
 /* Copy frames [first, first+frames) of channels 0..nch-1 of a stream.
  * Float version: writes dst[f*dstStride + c] (range -1..1). Frames not available are set to 0.
  * Int version: writes 24-bit values (sign-extended) to dst[f*nch + c].

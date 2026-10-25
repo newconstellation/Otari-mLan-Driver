@@ -733,6 +733,18 @@ uint64_t nd20rx_frames_written(ND20Rx *rx, int stream) {
     return atomic_load_explicit(&rx->s[stream].written, memory_order_acquire);
 }
 
+int nd20rx_buffer_activity(ND20Rx *rx, int stream) {
+    if (!rx || stream < 0 || stream >= rx->count) return 0;
+    Stream *s = &rx->s[stream];
+    if (!s->buf) return 0;
+    int n = 0;
+    for (uint32_t i = 0; i < NDCL; i++) {
+        const volatile uint32_t *q = (const volatile uint32_t *)(void *)(s->buf + (size_t)i * STRIDE + PKT_OFFSET);
+        if (q[0] || q[1] || q[2]) n++;
+    }
+    return n;
+}
+
 int nd20rx_stream_offset(ND20Rx *rx, int stream, int64_t *offset) {
     if (!rx || stream < 0 || stream >= rx->count) return 0;
     Stream *s = &rx->s[stream];
