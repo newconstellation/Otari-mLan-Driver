@@ -129,3 +129,12 @@
 - Channel 10 stream (DBS 8): activity on stream positions 5,6,7,8 only; 2,3,4 silent.
   → the stream carries **only the routing-3 card**, in channel order. The routing-2 card isn't sent although
   output slot C asks for routing 2. Channels 0 (line-input) and 5 (line-out) silent.
+
+### 2026-10-27 03:12 — swap test (mic-amp unit A/B=3, C/D=2)
+- WAV of channel 10 (tone counts): position 3 = 3 bursts, position 4 = 4 bursts, position 2 low (−52 dBFS);
+  positions 5–8 silent. → now **card A** (on routing 3) is in the stream and card C (on routing 2) is not.
+- Confirmed: **stream position N = card channel N**, and the unit sends **whichever card is on routing 3**;
+  the card on routing 2 is never sent. So it is not a card/slot fault on the mic-amp unit.
+- Line-out unit slots: C = 2, D = 3. Suspect: line-out **slot C isn't requesting** routing 2 (slot/card issue,
+  possibly the flashing ALARM on unit 05), or a unit sends one module per stream. Next: swap the line-out
+  unit's C/D numbers.
