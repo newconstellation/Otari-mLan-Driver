@@ -80,3 +80,7 @@
 - Scan: new units' GUIDs 0x0005420203000005 (node 0xffc4) and 0x0005420203000003 (node 0xffc5), both
   model 0x203 "Natv ND-20B"; ROM quadlet 59 = 0x00060000 on both, 0x00050000 on the line-input unit.
 - nd20remote watch with the remote in use: 0 events (the remote still sends nothing to the Mac).
+- Sweep 6 (line-in unit master; mic-amp unit set to 1-5 OFF; ALARM still on the mic-amp unit): the mono
+  stream **moved to channel 5**, source **node 4 = GUID ...0005**; nothing from the line-input unit (...0048).
+  Still DBS 1. ROM quadlet 59 (live): ...0048 = 0x00030000, ...0003 = 0x00020000 (and quadlet 56 = 0x40000060),
+  ...0005 = 0x00010000. GUID ↔ unit role (mic-amp vs line-out) not yet identified.
