@@ -84,3 +84,16 @@
   stream **moved to channel 5**, source **node 4 = GUID ...0005**; nothing from the line-input unit (...0048).
   Still DBS 1. ROM quadlet 59 (live): ...0048 = 0x00030000, ...0003 = 0x00020000 (and quadlet 56 = 0x40000060),
   ...0005 = 0x00010000. GUID ↔ unit role (mic-amp vs line-out) not yet identified.
+
+### 2026-10-27 02:00 — audio confirmed flowing between ND-20s; IRM bookings
+- Signals now come out of the line-out unit's cards: **unit-to-unit audio works over this bus.**
+- IRM (now node 0xffc5, an ND-20 is root/IRM): **channels 0, 5 and 10 allocated**, 520 of 4915 bandwidth units used.
+  Matches the UNIT IDs: line-input = 00, mic-amp = 0A (10), and (to confirm) line-out = 05.
+  Working hypothesis: **each ND-20 books and transmits on the isochronous channel equal to its UNIT ID**
+  (not its routing numbers); routing numbers select slots inside a unit's stream.
+- Apple's async stream listener, channels 0–5, 10 s: only **channel 5** (SID 4 = GUID ...0005), DBS 1, all-zero samples.
+  **Channels 0 and 10 are booked but nothing is received on them** by either receive path.
+- Explanations to test: (a) the audio streams use an isochronous **tag** other than 1 and Apple's receive DMA only
+  accepts tag 1 (receive tag matching isn't exposed in IOFireWireLib); (b) bookings are reservations only and the
+  audio itself goes by asynchronous transactions; (c) streams start only when a destination is set and the Mac's
+  listen windows missed them. A Linux PC with any OHCI FireWire card can receive all tags and would settle (a).
