@@ -65,3 +65,18 @@
   (A second run labelled "master" was taken with SETUP 1-5 still OFF: 0 packets; the master test is **not done yet**.)
   **ROUTING MONITOR** on routing 0 from the CB-181 during listening: 0 packets for the first 11 s captured.
   The bus-reset idea is ruled out. **SETUP 1-5 ON** (link-group master) + power-cycle, tone on 1–8: **0 packets** (8 s captured), so hypothesis 1 is ruled out too. Next (2026-10-26): add a CB-77A line-out ND-20 with a slot on routing 0.
+
+### 2026-10-27: three units (line-in UNIT 00 master, mic-amp UNIT 01, line-out UNIT 02) + CB-181
+- **First isochronous stream seen.** Channel 0, ~8100 packets/s, 0 lost, from **SID 2** = node 0xffc2 = the
+  line-input ND-20 (GUID ...0048). Standard IEC 61883-6: CIP `0201xxxx 9002yyyy` (SID 2, **DBS 1**, FMT 0x10
+  AM824, FDF 0x02 = 48 kHz, SYT present on 3 of 4 packets), 5–7 data blocks per packet, label 0x40 (MBLA 24-bit).
+  nd20rx decoded it cleanly (isoch header stored little-endian by Apple's DMA; handled).
+- **Only ONE audio channel** in the stream (DBS 1), and it is the converter's noise floor: peak −101 dBFS,
+  RMS −115 dBFS, no tone in the WAV. Not the 8 channels of routing 0 with tone.
+- Channels 1, 2, 3: nothing. Sweep of all 64: only channel 0 (plus a single stray packet on channel 4).
+- Hypothesis: this mono stream is the **CB-181's ROUTING MONITOR feed** (one channel, sent to the remote),
+  not inter-unit audio. To confirm: toggle ROUTING MONITOR and change the monitored channel while listening.
+- Clock fit reported 48.4–49.0 kHz at lock (should be 48.0): lock is declared too early; lengthen the fit.
+- Scan: new units' GUIDs 0x0005420203000005 (node 0xffc4) and 0x0005420203000003 (node 0xffc5), both
+  model 0x203 "Natv ND-20B"; ROM quadlet 59 = 0x00060000 on both, 0x00050000 on the line-input unit.
+- nd20remote watch with the remote in use: 0 events (the remote still sends nothing to the Mac).
