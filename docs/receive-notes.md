@@ -97,3 +97,22 @@
   accepts tag 1 (receive tag matching isn't exposed in IOFireWireLib); (b) bookings are reservations only and the
   audio itself goes by asynchronous transactions; (c) streams start only when a destination is set and the Mac's
   listen windows missed them. A Linux PC with any OHCI FireWire card can receive all tags and would settle (a).
+
+### 2026-10-27 02:09 — FIRST REAL AUDIO RECEIVED (mic-amp unit, channel 10)
+- Line-out unit UNIT ID confirmed **05** → bookings 0, 5, 10 = UNIT IDs 00, 05, 0A. **Each ND-20 transmits on the
+  isochronous channel equal to its UNIT ID.**
+- **Channel 10** (mic-amp unit 0A, SID 5 = node 0xffc5 = GUID ...0003): standard IEC 61883-6 AM824, CIP `0508xxxx 9002yyyy`,
+  **DBS 8 = 8 audio channels**, 48 kHz, 5–6 blocks/packet, ~8000 pkts/s, **0 lost**. Live mic signal decoded by nd20rx:
+  a −12.5 dBFS signal moved across stream channels 3 → 4 → 5 while the user patched; the others sat at the preamp
+  noise floor (−88…−98 dBFS). Received by both nd20rx and Apple's async stream listener.
+- Channel 5 (line-out unit 05, GUID ...0005): DBS 1, digital silence (all-zero samples). An output-only unit still
+  sends a minimal 1-channel stream; nd20rx picked it as clock master (fine: same link-group clock).
+- Channel 0 (line-input unit 00): booked but **no packets** during this run.
+- The mic-amp unit has 2 cards (16 channels) but its stream carries only 8. Working hypothesis: **a unit streams only
+  the modules some destination is playing** (DBS = 8 × modules in use), which also explains the earlier single-unit
+  silence and the line-input unit being silent now (no output slot playing its routing, or a routing conflict:
+  the mic-amp unit's ALARM is still lit).
+- Unit identities: line-input 00 = GUID ...0048; mic-amp 0A = GUID ...0003; line-out 05 = GUID ...0005.
+- Earlier "tag filtering" idea is withdrawn: the streams were simply not running at the time of those sweeps.
+- Driver consequence: the input map must be by **UNIT ID channel + position inside that unit's stream**, not
+  "routing N = channel N". Next: learn how modules are ordered inside a multi-module stream.
