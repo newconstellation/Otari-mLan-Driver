@@ -122,3 +122,10 @@
 - Channel 10 (mic-amp unit, SID 4 this time): DBS 8, 48 kHz, 0 lost; live signals on stream channels 5–8
   (one at −0.4 dBFS). Still only 8 of the unit's 16 mic channels in the stream.
 - Channel 5 (line-out unit): **no stream this time** (earlier it sent DBS 1 silence). Channel 0 (line-input): nothing.
+
+### 2026-10-27 03:02 — which card is in the mic-amp stream
+- Settings: line-out unit 05 slots A–D = routing 0,1,2,3; mic-amp unit 0A cards on routing 2 and 3; flashing ALARM on 05.
+- Signals: tone bursts into routing-2 card ch 2,3,4 and routing-3 card ch 5,6,7,8 (channel N = N one-second tones).
+- Channel 10 stream (DBS 8): activity on stream positions 5,6,7,8 only; 2,3,4 silent.
+  → the stream carries **only the routing-3 card**, in channel order. The routing-2 card isn't sent although
+  output slot C asks for routing 2. Channels 0 (line-input) and 5 (line-out) silent.
