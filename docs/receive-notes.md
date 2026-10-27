@@ -116,3 +116,9 @@
 - Earlier "tag filtering" idea is withdrawn: the streams were simply not running at the time of those sweeps.
 - Driver consequence: the input map must be by **UNIT ID channel + position inside that unit's stream**, not
   "routing N = channel N". Next: learn how modules are ordered inside a multi-module stream.
+
+### 2026-10-27 02:57 — after rebooting a unit, audio passes again
+- Output unit plays again after a reboot (routing changes may need a power-cycle to take effect).
+- Channel 10 (mic-amp unit, SID 4 this time): DBS 8, 48 kHz, 0 lost; live signals on stream channels 5–8
+  (one at −0.4 dBFS). Still only 8 of the unit's 16 mic channels in the stream.
+- Channel 5 (line-out unit): **no stream this time** (earlier it sent DBS 1 silence). Channel 0 (line-input): nothing.
